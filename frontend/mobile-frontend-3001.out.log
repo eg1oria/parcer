@@ -1,0 +1,19 @@
+
+> frontend@0.1.0 dev
+> next dev -p 3001
+
+▲ Next.js 16.2.4 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://172.20.10.5:3001
+✓ Ready in 795ms
+Creating turbopack project { dir: 'C:\\Users\\leont\\Desktop\\parcer\\frontend', testMode: true }
+
+ GET / 200 in 3.2s (next.js: 2.7s, application-code: 482ms)
+ GET /tests/f42d22cb-3146-4388-a8f5-03abf9f145f0 200 in 3.4s (next.js: 3.3s, application-code: 166ms)
+ GET / 200 in 19ms (next.js: 7ms, application-code: 12ms)
+ GET /tests/7705334e-8124-457d-a999-6ca4f637e320 200 in 69ms (next.js: 14ms, application-code: 55ms)
+ GET / 200 in 27ms (next.js: 4ms, application-code: 22ms)
+ GET / 200 in 39ms (next.js: 4ms, application-code: 35ms)
+ GET /tests 200 in 67ms (next.js: 41ms, application-code: 26ms)
+ GET / 200 in 21ms (next.js: 4ms, application-code: 17ms)
+[?25h
