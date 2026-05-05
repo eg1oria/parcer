@@ -301,6 +301,10 @@ export class TextExtractorService {
   }
 
   private async extractPdfText(buffer: Buffer): Promise<string> {
+    if (!this.isRichPdfExtractionEnabled()) {
+      return this.extractPlainPdfTextSafely(buffer);
+    }
+
     try {
       return await this.extractRichPdfText(buffer);
     } catch (error) {
@@ -311,6 +315,10 @@ export class TextExtractorService {
       );
     }
 
+    return this.extractPlainPdfTextSafely(buffer);
+  }
+
+  private async extractPlainPdfTextSafely(buffer: Buffer): Promise<string> {
     try {
       return await this.extractPlainPdfText(buffer);
     } catch (error) {
@@ -1421,5 +1429,17 @@ export class TextExtractorService {
     }
 
     return this.pdfParsePromise;
+  }
+
+  private isRichPdfExtractionEnabled(): boolean {
+    const value = this.configService.get<string>(
+      'PDF_RICH_EXTRACTION_ENABLED',
+    );
+
+    if (!value) {
+      return false;
+    }
+
+    return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
   }
 }
