@@ -851,7 +851,7 @@ function QuestionStep({
 
   return (
     <article>
-      <h2 className="break-words text-center bg-black/15 p-2 py-4 rounded-md text-2xl font-semibold leading-8 text-stone-950 sm:text-3xl sm:leading-10 mb-10">
+      <h2 className="text-center text-2xl sm:text-3xl font-medium text-gray-900 leading-snug mb-8 max-w-2xl mx-auto bg-gray-50 px-6 py-4 rounded-xl border border-gray-100">
         {question.text}
       </h2>
 
@@ -887,8 +887,7 @@ function QuestionImageGallery({ imageUrls }: { imageUrls?: string[] }) {
       {safeImageUrls.map((imageUrl, index) => (
         <figure
           key={`${imageUrl.slice(0, 48)}-${index}`}
-          className="overflow-hidden rounded-md border border-stone-200 bg-white p-2 shadow-sm"
-        >
+          className="overflow-hidden rounded-md border border-stone-200 bg-white p-2 shadow-sm">
           <img
             className="max-h-[42dvh] w-full object-contain"
             src={imageUrl}

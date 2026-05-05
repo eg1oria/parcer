@@ -1,18 +1,11 @@
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { configureApp, NEST_APP_FACTORY_OPTIONS } from './app.setup';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  app.enableCors();
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
+  const app = await NestFactory.create(AppModule, NEST_APP_FACTORY_OPTIONS);
+  configureApp(app);
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('Test Prep Platform API')

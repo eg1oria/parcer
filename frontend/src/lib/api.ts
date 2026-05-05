@@ -19,6 +19,7 @@ import type {
 type ApiRequestOptions = Omit<RequestInit, "body"> & {
   body?: BodyInit | null;
   token?: string;
+  timeoutMs?: number;
 };
 
 type LoginPayload = {
@@ -33,6 +34,7 @@ type PreviewImportPayload = {
 };
 
 const API_REQUEST_TIMEOUT_MS = 30000;
+const IMPORT_REQUEST_TIMEOUT_MS = 120000;
 
 export class ApiError extends Error {
   constructor(
@@ -90,6 +92,7 @@ export async function previewImport(
     method: "POST",
     token,
     body: formData,
+    timeoutMs: IMPORT_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -101,6 +104,7 @@ export async function confirmImport(
     method: "POST",
     token,
     body: JSON.stringify(payload),
+    timeoutMs: IMPORT_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -199,7 +203,10 @@ async function apiRequest<T>(
     headers.set("Accept", "application/json");
   }
 
-  const { signal, cleanup } = createRequestSignal(options.signal ?? undefined);
+  const { signal, cleanup } = createRequestSignal(
+    options.signal ?? undefined,
+    options.timeoutMs,
+  );
   let response: Response;
 
   try {
@@ -239,7 +246,10 @@ async function apiRequest<T>(
   return payload as T;
 }
 
-function createRequestSignal(signal?: AbortSignal): {
+function createRequestSignal(
+  signal?: AbortSignal,
+  timeoutMs = API_REQUEST_TIMEOUT_MS,
+): {
   signal?: AbortSignal;
   cleanup: () => void;
 } {
@@ -252,7 +262,7 @@ function createRequestSignal(signal?: AbortSignal): {
     typeof AbortSignal.timeout === "function"
   ) {
     return {
-      signal: AbortSignal.timeout(API_REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       cleanup: () => undefined,
     };
   }
@@ -264,7 +274,7 @@ function createRequestSignal(signal?: AbortSignal): {
   const controller = new AbortController();
   const timeoutId = globalThis.setTimeout(
     () => controller.abort(),
-    API_REQUEST_TIMEOUT_MS,
+    timeoutMs,
   );
 
   return {

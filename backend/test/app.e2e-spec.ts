@@ -1,7 +1,8 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
+import { configureApp, NEST_APP_FACTORY_OPTIONS } from './../src/app.setup';
 import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 
@@ -80,14 +81,8 @@ describe('Backend MVP (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication();
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
+    app = moduleFixture.createNestApplication(NEST_APP_FACTORY_OPTIONS);
+    configureApp(app);
     await app.init();
 
     prisma = app.get(PrismaService);
@@ -248,6 +243,40 @@ describe('Backend MVP (e2e)', () => {
         questions: preview.questions,
       })
       .expect(404);
+  });
+
+  it('accepts a larger confirm payload with embedded images', async () => {
+    const auth = await register('images@example.com');
+
+    const preview = (
+      await request(app.getHttpServer())
+        .post('/import/file-preview')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .attach('file', Buffer.from(sampleRawText(), 'utf8'), {
+          filename: 'images.txt',
+          contentType: 'text/plain',
+        })
+        .expect(200)
+    ).body as PreviewBody;
+
+    const largeImageUrl = `data:image/png;base64,${'A'.repeat(140_000)}`;
+
+    const confirm = (
+      await request(app.getHttpServer())
+        .post('/import/confirm')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .send({
+          title: 'Large image payload',
+          sourceFileId: preview.file.id,
+          questions: preview.questions.map((question, index) => ({
+            ...question,
+            imageUrls: index === 0 ? [largeImageUrl] : [],
+          })),
+        })
+        .expect(201)
+    ).body as ConfirmBody;
+
+    expect(confirm.questionsCount).toBe(2);
   });
 
   async function register(email: string): Promise<AuthBody> {
