@@ -1,6 +1,6 @@
 # Test Prep Platform Backend MVP
 
-NestJS backend for a test-preparation MVP: upload a teacher-provided TXT, DOCX, or text-based PDF file, extract text, preview parsed questions, confirm import, and pass the generated test.
+NestJS backend for a test-preparation MVP: upload a teacher-provided TXT, DOC, DOCX, or text-based PDF file, extract text, preview parsed questions, confirm import, and pass the generated test.
 
 ## Stack
 
@@ -8,7 +8,7 @@ NestJS backend for a test-preparation MVP: upload a teacher-provided TXT, DOCX, 
 - PostgreSQL + Prisma ORM 7
 - JWT auth + bcrypt
 - Multer file upload
-- TXT/DOCX/PDF text extraction
+- TXT/DOC/DOCX/PDF text extraction
 - class-validator / class-transformer
 - Swagger/OpenAPI
 
@@ -65,7 +65,7 @@ Content-Type: multipart/form-data
 
 Form fields:
 
-- `file`: required, `.txt`, `.docx`, or `.pdf`
+- `file`: required, `.txt`, `.doc`, `.docx`, or `.pdf`
 - `title`: optional
 - `format`: optional, defaults to `AUTO`
 

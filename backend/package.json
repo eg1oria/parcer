@@ -11,7 +11,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "node dist/src/main",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
@@ -34,6 +34,7 @@
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "jszip": "^3.10.1",
     "mammoth": "^1.12.0",
     "multer": "^2.1.1",
     "passport": "^0.7.0",
@@ -41,7 +42,8 @@
     "pdf-parse": "^2.4.5",
     "pg": "^8.20.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "word-extractor": "^1.0.4"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

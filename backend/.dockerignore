@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+.git
+coverage
+tmp-seed-test
+dev.db.bak
+prod.server.db

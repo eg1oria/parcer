@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsOptional,
@@ -15,9 +16,15 @@ import {
 export class ConfirmImportVariantDto {
   @ApiProperty({ example: 'Hypertext transfer protocol' })
   @IsString()
-  @MinLength(1)
   @MaxLength(1000)
   text: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  imageUrls?: string[];
 
   @ApiProperty({ example: true })
   @IsBoolean()
@@ -27,9 +34,15 @@ export class ConfirmImportVariantDto {
 export class ConfirmImportQuestionDto {
   @ApiProperty({ example: 'What is HTTP?' })
   @IsString()
-  @MinLength(1)
   @MaxLength(2000)
   text: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  imageUrls?: string[];
 
   @ApiProperty({ type: [ConfirmImportVariantDto] })
   @IsArray()

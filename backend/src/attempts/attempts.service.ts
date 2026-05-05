@@ -199,11 +199,13 @@ export class AttemptsService {
       questions: this.shuffleItems(test.questions).map((question, index) => ({
         id: question.id,
         text: question.text,
+        imageUrls: question.imageUrls,
         order: index + 1,
         variants: this.shuffleItems(question.variants).map(
           (variant, index) => ({
             id: variant.id,
             text: variant.text,
+            imageUrls: variant.imageUrls,
             order: index + 1,
           }),
         ),

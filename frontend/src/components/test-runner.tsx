@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 'use client';
 
 import Link from 'next/link';
@@ -26,6 +27,7 @@ import {
   startTest,
 } from '@/lib/api';
 import { clearStoredSession, readStoredSession } from '@/lib/session';
+import { getSafeQuestionImageUrls } from '@/lib/images';
 import type {
   AnswerCheckResponse,
   FinishResponse,
@@ -853,6 +855,8 @@ function QuestionStep({
         {question.text}
       </h2>
 
+      <QuestionImageGallery imageUrls={question.imageUrls} />
+
       <div className="mt-7 space-y-4">
         {question.variants.map((variant) => (
           <VariantOption
@@ -868,6 +872,31 @@ function QuestionStep({
         ))}
       </div>
     </article>
+  );
+}
+
+function QuestionImageGallery({ imageUrls }: { imageUrls?: string[] }) {
+  const safeImageUrls = getSafeQuestionImageUrls(imageUrls);
+
+  if (safeImageUrls.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="-mt-6 mb-8 grid gap-3">
+      {safeImageUrls.map((imageUrl, index) => (
+        <figure
+          key={`${imageUrl.slice(0, 48)}-${index}`}
+          className="overflow-hidden rounded-md border border-stone-200 bg-white p-2 shadow-sm"
+        >
+          <img
+            className="max-h-[42dvh] w-full object-contain"
+            src={imageUrl}
+            alt={`Изображение ${index + 1} к вопросу`}
+          />
+        </figure>
+      ))}
+    </div>
   );
 }
 
@@ -924,10 +953,36 @@ function VariantOption({
           <XCircle size={22} aria-hidden="true" />
         ) : null}
       </span>
-      <span className="break-words text-lg font-semibold leading-7 sm:text-xl sm:leading-8">
-        {variant.text}
+      <span className="flex min-w-0 flex-col items-center gap-3">
+        {variant.text ? (
+          <span className="break-words text-lg font-semibold leading-7 sm:text-xl sm:leading-8">
+            {variant.text}
+          </span>
+        ) : null}
+        <VariantImageGallery imageUrls={variant.imageUrls} />
       </span>
     </button>
+  );
+}
+
+function VariantImageGallery({ imageUrls }: { imageUrls?: string[] }) {
+  const safeImageUrls = getSafeQuestionImageUrls(imageUrls);
+
+  if (safeImageUrls.length === 0) {
+    return null;
+  }
+
+  return (
+    <span className="grid max-w-full gap-2">
+      {safeImageUrls.map((imageUrl, index) => (
+        <img
+          key={`${imageUrl.slice(0, 48)}-${index}`}
+          className="max-h-52 max-w-full rounded-md border border-stone-200 bg-white object-contain"
+          src={imageUrl}
+          alt={`Изображение ${index + 1} к варианту`}
+        />
+      ))}
+    </span>
   );
 }
 

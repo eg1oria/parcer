@@ -12,11 +12,13 @@ export type ParseOptions = {
 
 export type ParsedVariant = {
   text: string;
+  imageUrls?: string[];
   isCorrect: boolean;
 };
 
 export type ParsedQuestion = {
   text: string;
+  imageUrls?: string[];
   variants: ParsedVariant[];
   warnings?: string[];
 };

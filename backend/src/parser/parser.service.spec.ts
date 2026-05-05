@@ -139,6 +139,52 @@ C) Server
     expect(result[1].variants[0]).toEqual({ text: '==', isCorrect: true });
   });
 
+  it('keeps images from tagged questions and parses multiline variants', () => {
+    const imageUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+    const result = service.parseTextToQuestions(
+      `
+<question> Choose the circuit reading
+[[image:${imageUrl}]]
+<variant> 8 A
+<variant> 6
+A
+<variant> 5 A
+`,
+      { format: ParseFormat.TAGGED_FIRST_CORRECT },
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe('Choose the circuit reading');
+    expect(result[0].imageUrls).toEqual([imageUrl]);
+    expect(result[0].variants).toEqual([
+      { text: '8 A', isCorrect: true },
+      { text: '6 A', isCorrect: false },
+      { text: '5 A', isCorrect: false },
+    ]);
+  });
+
+  it('keeps image-only tagged variants as answer options', () => {
+    const imageUrl =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+    const result = service.parseTextToQuestions(
+      `
+<question> Choose the correct scheme
+<variant> [[image:${imageUrl}]]
+<variant> Text answer
+`,
+      { format: ParseFormat.TAGGED_FIRST_CORRECT },
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].imageUrls).toEqual([]);
+    expect(result[0].variants).toEqual([
+      { text: '', imageUrls: [imageUrl], isCorrect: true },
+      { text: 'Text answer', isCorrect: false },
+    ]);
+    expect(result[0].warnings).toEqual([]);
+  });
+
   it('can mark first standard variant as correct when format is selected', () => {
     const result = service.parseTextToQuestions(
       `

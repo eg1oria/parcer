@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import Link from "next/link";
@@ -34,6 +35,7 @@ import {
   readStoredSession,
   saveStoredSession,
 } from "@/lib/session";
+import { getSafeQuestionImageUrls } from "@/lib/images";
 import type {
   AuthResponse,
   AuthUser,
@@ -405,7 +407,7 @@ function ImportPanel({
       setNotice({
         tone: "error",
         title: "Файл не выбран",
-        messages: ["Выберите файл .txt, .docx или .pdf."],
+        messages: ["Выберите файл .txt, .doc, .docx или .pdf."],
       });
       return;
     }
@@ -457,8 +459,10 @@ function ImportPanel({
         sourceFileId: preview.file.id,
         questions: questions.map((question) => ({
           text: question.text.trim(),
+          imageUrls: getSafeQuestionImageUrls(question.imageUrls),
           variants: question.variants.map((variant) => ({
             text: variant.text.trim(),
+            imageUrls: getSafeQuestionImageUrls(variant.imageUrls),
             isCorrect: variant.isCorrect,
           })),
         })),
@@ -496,7 +500,7 @@ function ImportPanel({
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-stone-950">Импорт</h2>
-          <p className="text-sm text-stone-500">TXT, DOCX, PDF</p>
+          <p className="text-sm text-stone-500">TXT, DOC, DOCX, PDF</p>
         </div>
         {preview ? (
           <div className="flex flex-wrap gap-2 text-sm">
@@ -520,7 +524,7 @@ function ImportPanel({
               key={fileInputKey}
               className="sr-only"
               type="file"
-              accept=".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept=".txt,.doc,.docx,.pdf,text/plain,application/msword,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={handleFileChange}
             />
             <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-stone-100 text-stone-700">
@@ -531,7 +535,7 @@ function ImportPanel({
                 {file ? file.name : "Выберите файл"}
               </span>
               <span className="block text-xs text-stone-500">
-                {file ? formatFileSize(file.size) : "TXT, DOCX, PDF"}
+                {file ? formatFileSize(file.size) : "TXT, DOC, DOCX, PDF"}
               </span>
             </span>
             <span className="hidden min-h-8 shrink-0 items-center rounded-md border border-stone-300 px-2.5 text-xs font-semibold text-stone-700 sm:inline-flex">
@@ -724,6 +728,21 @@ function QuestionEditor({
     );
   }
 
+  function removeQuestionImage(questionIndex: number, imageIndex: number) {
+    onQuestionsChange(
+      questions.map((question, index) =>
+        index === questionIndex
+          ? {
+              ...question,
+              imageUrls: (question.imageUrls ?? []).filter(
+                (_, currentImageIndex) => currentImageIndex !== imageIndex,
+              ),
+            }
+          : question,
+      ),
+    );
+  }
+
   function updateVariantText(
     questionIndex: number,
     variantIndex: number,
@@ -739,6 +758,34 @@ function QuestionEditor({
           ...question,
           variants: question.variants.map((variant, currentVariantIndex) =>
             currentVariantIndex === variantIndex ? { ...variant, text } : variant,
+          ),
+        };
+      }),
+    );
+  }
+
+  function removeVariantImage(
+    questionIndex: number,
+    variantIndex: number,
+    imageIndex: number,
+  ) {
+    onQuestionsChange(
+      questions.map((question, index) => {
+        if (index !== questionIndex) {
+          return question;
+        }
+
+        return {
+          ...question,
+          variants: question.variants.map((variant, currentVariantIndex) =>
+            currentVariantIndex === variantIndex
+              ? {
+                  ...variant,
+                  imageUrls: (variant.imageUrls ?? []).filter(
+                    (_, currentImageIndex) => currentImageIndex !== imageIndex,
+                  ),
+                }
+              : variant,
           ),
         };
       }),
@@ -871,6 +918,12 @@ function QuestionEditor({
               />
             </label>
 
+            <QuestionImageEditor
+              imageUrls={question.imageUrls}
+              questionIndex={questionIndex}
+              onRemove={removeQuestionImage}
+            />
+
             <div className="mt-4 space-y-2">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -895,8 +948,9 @@ function QuestionEditor({
               {question.variants.map((variant, variantIndex) => (
                 <div
                   key={`${questionIndex}-${variantIndex}`}
-                  className="grid grid-cols-[32px_minmax(0,1fr)_40px] items-center gap-2"
+                  className="grid gap-2"
                 >
+                  <div className="grid grid-cols-[32px_minmax(0,1fr)_40px] items-center gap-2">
                   <input
                     className="size-4 justify-self-center accent-teal-700"
                     type="radio"
@@ -928,12 +982,111 @@ function QuestionEditor({
                   >
                     <Trash2 size={15} aria-hidden="true" />
                   </button>
+                  </div>
+                  <VariantImageEditor
+                    imageUrls={variant.imageUrls}
+                    questionIndex={questionIndex}
+                    variantIndex={variantIndex}
+                    onRemove={removeVariantImage}
+                  />
                 </div>
               ))}
             </div>
           </article>
         );
       })}
+    </div>
+  );
+}
+
+function QuestionImageEditor({
+  imageUrls,
+  questionIndex,
+  onRemove,
+}: {
+  imageUrls?: string[];
+  questionIndex: number;
+  onRemove: (questionIndex: number, imageIndex: number) => void;
+}) {
+  const safeImageUrls = getSafeQuestionImageUrls(imageUrls);
+
+  if (safeImageUrls.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+      {safeImageUrls.map((imageUrl, imageIndex) => (
+        <figure
+          key={`${imageUrl.slice(0, 48)}-${imageIndex}`}
+          className="relative overflow-hidden rounded-md border border-stone-200 bg-stone-50"
+        >
+          <img
+            className="max-h-64 w-full object-contain"
+            src={imageUrl}
+            alt={`Изображение к вопросу ${questionIndex + 1}`}
+          />
+          <button
+            type="button"
+            className={`${dangerButtonClass} absolute right-2 top-2 size-9 bg-white/95 px-0 shadow-sm`}
+            onClick={() => onRemove(questionIndex, imageIndex)}
+            aria-label={`Удалить изображение ${imageIndex + 1} из вопроса ${
+              questionIndex + 1
+            }`}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+function VariantImageEditor({
+  imageUrls,
+  questionIndex,
+  variantIndex,
+  onRemove,
+}: {
+  imageUrls?: string[];
+  questionIndex: number;
+  variantIndex: number;
+  onRemove: (
+    questionIndex: number,
+    variantIndex: number,
+    imageIndex: number,
+  ) => void;
+}) {
+  const safeImageUrls = getSafeQuestionImageUrls(imageUrls);
+
+  if (safeImageUrls.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="ml-8 grid gap-2 sm:grid-cols-2">
+      {safeImageUrls.map((imageUrl, imageIndex) => (
+        <figure
+          key={`${imageUrl.slice(0, 48)}-${imageIndex}`}
+          className="relative overflow-hidden rounded-md border border-stone-200 bg-stone-50"
+        >
+          <img
+            className="max-h-44 w-full object-contain"
+            src={imageUrl}
+            alt={`Изображение к варианту ${variantIndex + 1}`}
+          />
+          <button
+            type="button"
+            className={`${dangerButtonClass} absolute right-2 top-2 size-9 bg-white/95 px-0 shadow-sm`}
+            onClick={() => onRemove(questionIndex, variantIndex, imageIndex)}
+            aria-label={`Удалить изображение ${imageIndex + 1} из варианта ${
+              variantIndex + 1
+            }`}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
+        </figure>
+      ))}
     </div>
   );
 }
@@ -1180,9 +1333,11 @@ function Metric({
 function normalizeQuestions(questions: ParsedQuestion[]): ParsedQuestion[] {
   return questions.map((question) => ({
     text: question.text ?? "",
+    imageUrls: getSafeQuestionImageUrls(question.imageUrls),
     warnings: question.warnings ?? [],
     variants: question.variants.map((variant) => ({
       text: variant.text ?? "",
+      imageUrls: getSafeQuestionImageUrls(variant.imageUrls),
       isCorrect: Boolean(variant.isCorrect),
     })),
   }));
@@ -1221,7 +1376,10 @@ function getPreviewQuestionId(questionIndex: number): string {
 function getQuestionIssues(question: ParsedQuestion): string[] {
   const issues: string[] = [];
 
-  if (!question.text.trim()) {
+  if (
+    !question.text.trim() &&
+    getSafeQuestionImageUrls(question.imageUrls).length === 0
+  ) {
     issues.push("нет текста");
   }
 
@@ -1236,7 +1394,13 @@ function getQuestionIssues(question: ParsedQuestion): string[] {
     issues.push("нужен ровно один правильный ответ");
   }
 
-  if (question.variants.some((variant) => !variant.text.trim())) {
+  if (
+    question.variants.some(
+      (variant) =>
+        !variant.text.trim() &&
+        getSafeQuestionImageUrls(variant.imageUrls).length === 0,
+    )
+  ) {
     issues.push("есть пустые варианты");
   }
 

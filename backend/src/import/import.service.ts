@@ -8,6 +8,7 @@ import { TextExtractorService } from '../files/text-extractor.service';
 import { ParsedQuestion, ParseFormat } from '../parser/parser.types';
 import { ParserService } from '../parser/parser.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { isQuestionImageUrl } from '../common/image-url';
 import {
   ConfirmImportDto,
   ConfirmImportQuestionDto,
@@ -85,10 +86,12 @@ export class ImportService {
         questions: {
           create: dto.questions.map((question, questionIndex) => ({
             text: question.text.trim(),
+            imageUrls: question.imageUrls ?? [],
             order: questionIndex + 1,
             variants: {
               create: question.variants.map((variant, variantIndex) => ({
                 text: variant.text.trim(),
+                imageUrls: variant.imageUrls ?? [],
                 isCorrect: variant.isCorrect,
                 order: variantIndex + 1,
               })),
@@ -116,11 +119,18 @@ export class ImportService {
       100000,
     );
 
-    if (rawText.length > maxChars) {
+    if (this.textWithoutEmbeddedImages(rawText).length > maxChars) {
       throw new BadRequestException(
         `Extracted text is too large. Max size is ${maxChars} characters`,
       );
     }
+  }
+
+  private textWithoutEmbeddedImages(rawText: string): string {
+    return rawText
+      .replace(/\[\[image:[^\]]+\]\]/giu, '')
+      .replace(/<img\b[^>]*>/giu, '')
+      .replace(/<image\b[^>]*>/giu, '');
   }
 
   private async ensureSourceFileOwnedByUser(
@@ -141,6 +151,7 @@ export class ImportService {
     const warnings = this.flattenWarnings(
       questions.map((question) => ({
         text: question.text,
+        imageUrls: question.imageUrls,
         variants: question.variants,
       })),
     );
@@ -154,7 +165,10 @@ export class ImportService {
   }
 
   private flattenWarnings(
-    questions: Pick<ParsedQuestion, 'text' | 'variants' | 'warnings'>[],
+    questions: Pick<
+      ParsedQuestion,
+      'text' | 'imageUrls' | 'variants' | 'warnings'
+    >[],
   ): string[] {
     return questions.flatMap((question, index) =>
       this.questionWarnings(question).map(
@@ -164,12 +178,22 @@ export class ImportService {
   }
 
   private questionWarnings(
-    question: Pick<ParsedQuestion, 'text' | 'variants' | 'warnings'>,
+    question: Pick<
+      ParsedQuestion,
+      'text' | 'imageUrls' | 'variants' | 'warnings'
+    >,
   ): string[] {
     const warnings: string[] = [];
+    const imageUrls = question.imageUrls ?? [];
 
-    if (!question.text.trim()) {
+    if (!question.text.trim() && imageUrls.length === 0) {
       warnings.push('text is empty');
+    }
+
+    for (const [imageIndex, imageUrl] of imageUrls.entries()) {
+      if (!isQuestionImageUrl(imageUrl)) {
+        warnings.push(`image ${imageIndex + 1} is invalid`);
+      }
     }
 
     if (question.variants.length < 2) {
@@ -185,8 +209,18 @@ export class ImportService {
     }
 
     for (const [variantIndex, variant] of question.variants.entries()) {
-      if (!variant.text.trim()) {
+      const variantImageUrls = variant.imageUrls ?? [];
+
+      if (!variant.text.trim() && variantImageUrls.length === 0) {
         warnings.push(`variant ${variantIndex + 1} text is empty`);
+      }
+
+      for (const [imageIndex, imageUrl] of variantImageUrls.entries()) {
+        if (!isQuestionImageUrl(imageUrl)) {
+          warnings.push(
+            `variant ${variantIndex + 1} image ${imageIndex + 1} is invalid`,
+          );
+        }
       }
     }
 

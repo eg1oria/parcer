@@ -5,6 +5,7 @@ import {
   ParseFormat,
   ParseOptions,
 } from './parser.types';
+import { normalizeQuestionImageUrl } from '../common/image-url';
 
 type MarkerKind = 'latin' | 'cyrillic' | 'numeric';
 
@@ -24,8 +25,10 @@ const ANSWER_LINE_PATTERN =
 const QUESTION_PREFIX_PATTERN =
   '^(?:\\u0432\\u043e\\u043f\\u0440\\u043e\\u0441|question)\\s*[:\\-]\\s*';
 const VARIANT_LINE_PATTERN =
-  '^([A-Za-z\\u0410-\\u042f\\u0401\\u0430-\\u044f\\u0451]|\\d{1,2})\\s*[\\).:-]\\s*(.+)$';
+  '^([A-Za-z\\u0410-\\u042f\\u0401\\u0430-\\u044f\\u0451]|\\d{1,2})\\s*[\\).:-]\\s*(.*)$';
 const NUMERIC_QUESTION_LINE_PATTERN = /^\d+[.)](?:\s+\S|[^\s\d].*)/u;
+const IMAGE_REFERENCE_PATTERN =
+  /\[\[image:([^\]]+)\]\]|<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>|<image\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*\/?>/giu;
 
 const CYRILLIC_MARKERS = [
   '\u0430',
@@ -169,19 +172,29 @@ export class ParserService {
     const warnings: string[] = [];
     const questionLines: string[] = [];
     const variants: ParsedVariant[] = [];
+    const imageUrls: string[] = [];
 
     for (const rawLine of block.split('\n')) {
-      const line = rawLine.trim();
+      const extractedLine = this.extractImagesFromText(rawLine.trim());
+      const line = extractedLine.text.trim();
 
       if (!line) {
+        this.appendImagesToCurrentTarget(
+          extractedLine.imageUrls,
+          imageUrls,
+          variants,
+        );
         continue;
       }
 
-      const variantMatch = line.match(/^\((!|\?)\)\s*(.+)$/u);
+      const variantMatch = line.match(/^\((!|\?)\)\s*(.*)$/u);
 
       if (variantMatch) {
         variants.push({
           text: variantMatch[2].trim(),
+          ...(extractedLine.imageUrls.length
+            ? { imageUrls: extractedLine.imageUrls }
+            : {}),
           isCorrect: variantMatch[1] === '!',
         });
         continue;
@@ -191,14 +204,20 @@ export class ParserService {
         variants[variants.length - 1].text = `${
           variants[variants.length - 1].text
         } ${line}`.trim();
+        variants[variants.length - 1].imageUrls = [
+          ...(variants[variants.length - 1].imageUrls ?? []),
+          ...extractedLine.imageUrls,
+        ];
         continue;
       }
 
+      imageUrls.push(...extractedLine.imageUrls);
       questionLines.push(this.cleanQuestionLine(line));
     }
 
     return this.withQuestionWarnings({
       text: questionLines.join(' ').trim(),
+      imageUrls,
       variants,
       warnings,
     });
@@ -219,15 +238,26 @@ export class ParserService {
       /<question>\s*([\s\S]*?)(?=<variant>|$)/i,
     );
     const variantMatches = Array.from(
-      block.matchAll(/<variant>\s*([^\n\r<]*(?:[^\S\r\n]+[^\n\r<]*)?)/gi),
+      block.matchAll(/<variant>\s*([\s\S]*?)(?=<variant>|<question>|$)/gi),
     );
-    const text = questionMatch?.[1]?.trim() ?? '';
+    const questionContent = this.extractImagesFromText(
+      questionMatch?.[1] ?? '',
+    );
+    const imageUrls = [...questionContent.imageUrls];
+    const text = this.normalizeInlineText(questionContent.text);
     const variants = variantMatches
-      .map((match, index) => ({
-        text: match[1].trim(),
-        isCorrect: index === 0,
-      }))
-      .filter((variant) => variant.text.length > 0);
+      .map((match, index) => {
+        const variantContent = this.extractImagesFromText(match[1]);
+
+        return {
+          text: this.normalizeInlineText(variantContent.text),
+          ...(variantContent.imageUrls.length
+            ? { imageUrls: variantContent.imageUrls }
+            : {}),
+          isCorrect: index === 0,
+        };
+      })
+      .filter((variant) => this.variantHasContent(variant));
 
     if (!questionMatch) {
       warnings.push('Question tag was not found');
@@ -235,6 +265,7 @@ export class ParserService {
 
     return this.withQuestionWarnings({
       text,
+      imageUrls,
       variants,
       warnings,
     });
@@ -336,12 +367,19 @@ export class ParserService {
     const warnings: string[] = [];
     const questionLines: string[] = [];
     const variants: InternalVariant[] = [];
+    const imageUrls: string[] = [];
     let answerMarker: string | null = null;
 
     for (const rawLine of block.split('\n')) {
-      const line = rawLine.trim();
+      const extractedLine = this.extractImagesFromText(rawLine.trim());
+      const line = extractedLine.text.trim();
 
       if (!line) {
+        this.appendImagesToCurrentTarget(
+          extractedLine.imageUrls,
+          imageUrls,
+          variants,
+        );
         continue;
       }
 
@@ -350,6 +388,7 @@ export class ParserService {
         variants.length === 0 &&
         this.isQuestionStart(line, false, null, true)
       ) {
+        imageUrls.push(...extractedLine.imageUrls);
         questionLines.push(this.cleanQuestionLine(line));
         continue;
       }
@@ -375,6 +414,9 @@ export class ParserService {
           marker: variantMarker.normalized,
           markerKind: variantMarker.kind,
           text,
+          ...(extractedLine.imageUrls.length
+            ? { imageUrls: extractedLine.imageUrls }
+            : {}),
           isCorrect: markedCorrect,
         });
         continue;
@@ -384,9 +426,14 @@ export class ParserService {
         variants[variants.length - 1].text = `${
           variants[variants.length - 1].text
         } ${line}`.trim();
+        variants[variants.length - 1].imageUrls = [
+          ...(variants[variants.length - 1].imageUrls ?? []),
+          ...extractedLine.imageUrls,
+        ];
         continue;
       }
 
+      imageUrls.push(...extractedLine.imageUrls);
       questionLines.push(this.cleanQuestionLine(line));
     }
 
@@ -413,7 +460,7 @@ export class ParserService {
 
     const text = questionLines.join(' ').trim();
 
-    if (!text) {
+    if (!text && imageUrls.length === 0) {
       warnings.push('Question text is empty');
     }
 
@@ -431,14 +478,19 @@ export class ParserService {
       warnings.push('Question has multiple correct answers');
     }
 
-    if (text.length < 3 || variants.some((variant) => !variant.text.trim())) {
+    if (
+      (text.length < 3 && imageUrls.length === 0) ||
+      variants.some((variant) => !this.variantHasContent(variant))
+    ) {
       warnings.push('Question text looks poorly recognized');
     }
 
     return {
       text,
-      variants: variants.map(({ text: variantText, isCorrect }) => ({
+      imageUrls,
+      variants: variants.map(({ text: variantText, imageUrls, isCorrect }) => ({
         text: variantText,
+        ...(imageUrls?.length ? { imageUrls } : {}),
         isCorrect,
       })),
       warnings,
@@ -462,6 +514,7 @@ export class ParserService {
 
     return this.withQuestionWarnings({
       text: question.text,
+      imageUrls: question.imageUrls,
       variants: question.variants.map((variant, index) => ({
         ...variant,
         isCorrect: index === 0,
@@ -474,8 +527,9 @@ export class ParserService {
 
   private withQuestionWarnings(question: ParsedQuestion): ParsedQuestion {
     const warnings = [...(question.warnings ?? [])];
+    const imageUrls = question.imageUrls ?? [];
 
-    if (!question.text) {
+    if (!question.text && imageUrls.length === 0) {
       warnings.push('Question text is empty');
     }
 
@@ -496,16 +550,74 @@ export class ParserService {
     }
 
     if (
-      question.text.length < 3 ||
-      question.variants.some((variant) => !variant.text.trim())
+      (question.text.length < 3 && imageUrls.length === 0) ||
+      question.variants.some((variant) => !this.variantHasContent(variant))
     ) {
       warnings.push('Question text looks poorly recognized');
     }
 
     return {
       ...question,
+      imageUrls,
       warnings: Array.from(new Set(warnings)),
     };
+  }
+
+  private extractImagesFromText(value: string): {
+    text: string;
+    imageUrls: string[];
+  } {
+    const imageUrls = Array.from(value.matchAll(IMAGE_REFERENCE_PATTERN))
+      .map((match) => match.slice(1).find(Boolean))
+      .filter((url): url is string => typeof url === 'string')
+      .map((url) => normalizeQuestionImageUrl(this.decodeHtmlEntities(url)))
+      .filter((url): url is string => Boolean(url));
+
+    return {
+      text: value.replace(IMAGE_REFERENCE_PATTERN, ' ').trim(),
+      imageUrls,
+    };
+  }
+
+  private appendImagesToCurrentTarget(
+    nextImageUrls: string[],
+    questionImageUrls: string[],
+    variants: ParsedVariant[],
+  ): void {
+    if (nextImageUrls.length === 0) {
+      return;
+    }
+
+    if (variants.length === 0) {
+      questionImageUrls.push(...nextImageUrls);
+      return;
+    }
+
+    variants[variants.length - 1].imageUrls = [
+      ...(variants[variants.length - 1].imageUrls ?? []),
+      ...nextImageUrls,
+    ];
+  }
+
+  private variantHasContent(
+    variant: Pick<ParsedVariant, 'text' | 'imageUrls'>,
+  ): boolean {
+    return (
+      variant.text.trim().length > 0 || (variant.imageUrls?.length ?? 0) > 0
+    );
+  }
+
+  private normalizeInlineText(value: string): string {
+    return value.replace(/\s+/g, ' ').trim();
+  }
+
+  private decodeHtmlEntities(value: string): string {
+    return value
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/&amp;/gi, '&');
   }
 
   private isQuestionStart(

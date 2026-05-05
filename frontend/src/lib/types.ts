@@ -26,17 +26,20 @@ export type UploadedFileSummary = {
 
 export type ParsedVariant = {
   text: string;
+  imageUrls?: string[];
   isCorrect: boolean;
 };
 
 export type ParsedQuestion = {
   text: string;
+  imageUrls?: string[];
   variants: ParsedVariant[];
   warnings?: string[];
 };
 
 export type ImportQuestionPayload = {
   text: string;
+  imageUrls?: string[];
   variants: ParsedVariant[];
 };
 
@@ -96,12 +99,14 @@ export type PublicTestSummary = {
 export type StartedVariant = {
   id: string;
   text: string;
+  imageUrls: string[];
   order: number;
 };
 
 export type StartedQuestion = {
   id: string;
   text: string;
+  imageUrls: string[];
   order: number;
   variants: StartedVariant[];
 };

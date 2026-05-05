@@ -64,6 +64,7 @@ model Question {
   id             String          @id @default(uuid()) @db.Uuid
   testId         String          @db.Uuid
   text           String
+  imageUrls      String[]        @default([])
   order          Int
   test           Test            @relation(fields: [testId], references: [id], onDelete: Cascade)
   variants       Variant[]
@@ -77,6 +78,7 @@ model Variant {
   id             String          @id @default(uuid()) @db.Uuid
   questionId     String          @db.Uuid
   text           String
+  imageUrls      String[]        @default([])
   isCorrect      Boolean         @default(false)
   order          Int
   question       Question        @relation(fields: [questionId], references: [id], onDelete: Cascade)
