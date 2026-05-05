@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { extname } from 'node:path';
 import JSZip from 'jszip';
@@ -22,7 +22,6 @@ const execFileAsync = promisify(execFile);
 
 const IMAGE_MARKER_PATTERN = /\[\[image:[^\]]+\]\]/g;
 const PDF_IMAGE_THRESHOLD_PX = 16;
-const DEFAULT_PDF_IMAGE_EXTRACTION_TIMEOUT_MS = 2000;
 const DOCX_IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   '.bmp': 'image/bmp',
   '.gif': 'image/gif',
@@ -50,8 +49,6 @@ type PdfImagePage = {
 
 @Injectable()
 export class TextExtractorService {
-  private readonly logger = new Logger(TextExtractorService.name);
-
   constructor(private readonly configService: ConfigService) {}
 
   async extractText(file: Express.Multer.File): Promise<string> {
@@ -124,57 +121,20 @@ export class TextExtractorService {
     }
 
     try {
-      const imageResult = await this.withTimeout(
-        parser.getImage({
-          imageBuffer: false,
-          imageDataUrl: true,
-          imageThreshold: PDF_IMAGE_THRESHOLD_PX,
-        }),
-        this.pdfImageExtractionTimeoutMs(),
-      );
+      const imageResult = await parser.getImage({
+        imageBuffer: false,
+        imageDataUrl: true,
+        imageThreshold: PDF_IMAGE_THRESHOLD_PX,
+      });
 
       return this.injectPdfImagesIntoTaggedText(
         textResult.pages,
         imageResult.pages,
         textResult.text,
       );
-    } catch (error) {
-      this.logger.warn(
-        `Skipping PDF image extraction and continuing with text only: ${
-          error instanceof Error ? error.message : 'unknown error'
-        }`,
-      );
+    } catch {
       return textResult.text;
     }
-  }
-
-  private pdfImageExtractionTimeoutMs(): number {
-    return getPositiveIntConfig(
-      this.configService,
-      'PDF_IMAGE_EXTRACTION_TIMEOUT_MS',
-      DEFAULT_PDF_IMAGE_EXTRACTION_TIMEOUT_MS,
-    );
-  }
-
-  private withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(
-          new Error(`Operation timed out after ${timeoutMs}ms`),
-        );
-      }, timeoutMs);
-
-      promise.then(
-        (value) => {
-          clearTimeout(timeoutId);
-          resolve(value);
-        },
-        (error: unknown) => {
-          clearTimeout(timeoutId);
-          reject(error);
-        },
-      );
-    });
   }
 
   private async extractDocxText(buffer: Buffer): Promise<string> {

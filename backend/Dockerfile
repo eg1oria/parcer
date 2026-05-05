@@ -25,10 +25,11 @@ ARG DATABASE_URL=postgresql://testprep:testprep@localhost:5432/testprep?schema=p
 ENV DATABASE_URL=${DATABASE_URL}
 COPY prisma.config.ts ./
 COPY prisma ./prisma
+COPY scripts ./scripts
 RUN npm run prisma:generate
 COPY --from=builder /app/dist ./dist
 ENV NODE_ENV=production
 
 EXPOSE 5000
 
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main.js"]
+CMD ["node", "scripts/start-production.mjs"]

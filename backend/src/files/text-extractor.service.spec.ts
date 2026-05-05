@@ -5,10 +5,7 @@ describe('TextExtractorService', () => {
   let service: TextExtractorService;
 
   beforeEach(() => {
-    service = new TextExtractorService({
-      get: (key: string) =>
-        key === 'PDF_IMAGE_EXTRACTION_TIMEOUT_MS' ? 10 : undefined,
-    } as ConfigService);
+    service = new TextExtractorService({} as ConfigService);
   });
 
   it('linearizes Word equation XML inside tagged variants', () => {
@@ -145,24 +142,5 @@ ${imageMarker}
       result.indexOf(firstVariantImage),
     );
     expect(result.slice(0, firstVariantIndex)).not.toContain('[[image:');
-  });
-
-  it('falls back to PDF text when image extraction times out', async () => {
-    const pdfText = `<question> Choose the formula
-<variant> First
-<variant> Second`;
-    const parser = {
-      getText: jest.fn().mockResolvedValue({
-        text: pdfText,
-        pages: [],
-      }),
-      getImage: jest.fn(
-        () => new Promise(() => undefined) as Promise<{ pages: [] }>,
-      ),
-    };
-
-    const result = await service['extractPdfTextWithImages'](parser as never);
-
-    expect(result).toBe(pdfText);
   });
 });
