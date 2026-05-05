@@ -17,7 +17,6 @@ import { extname, join } from 'node:path';
 import { promisify } from 'node:util';
 import JSZip from 'jszip';
 import * as mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
 import sharp from 'sharp';
 import WordExtractor from 'word-extractor';
 import { getPositiveIntConfig } from '../common/config/env-number';
@@ -119,11 +118,13 @@ type StructuredDocxText = {
 };
 
 type PdfJsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+type PdfParseModule = typeof import('pdf-parse');
 
 @Injectable()
 export class TextExtractorService {
   private readonly logger = new Logger(TextExtractorService.name);
   private pdfJsPromise: Promise<PdfJsModule> | null = null;
+  private pdfParsePromise: Promise<PdfParseModule> | null = null;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -349,6 +350,7 @@ export class TextExtractorService {
   }
 
   private async extractPlainPdfText(buffer: Buffer): Promise<string> {
+    const { PDFParse } = await this.getPdfParse();
     const parser = new PDFParse({
       data: new Uint8Array(buffer),
     });
@@ -1394,5 +1396,13 @@ export class TextExtractorService {
     }
 
     return this.pdfJsPromise;
+  }
+
+  private getPdfParse(): Promise<PdfParseModule> {
+    if (!this.pdfParsePromise) {
+      this.pdfParsePromise = import('pdf-parse');
+    }
+
+    return this.pdfParsePromise;
   }
 }
