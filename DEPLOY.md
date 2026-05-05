@@ -47,6 +47,15 @@ sudo ufw allow 'Nginx Full'
 sudo ufw --force enable
 ```
 
+If `sudo nginx -t` later fails with `could not build server_names_hash`, increase
+the Nginx hash bucket size once:
+
+```bash
+sudo sed -i '/http {/a\    server_names_hash_bucket_size 64;' /etc/nginx/nginx.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
 ## 3. Upload Project And Configure Env
 
 ```bash
