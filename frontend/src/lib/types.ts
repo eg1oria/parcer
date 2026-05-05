@@ -66,6 +66,21 @@ export type ConfirmImportResponse = {
   questionsCount: number;
 };
 
+export type SavedTestResponse = {
+  testId: string;
+  title: string;
+  questionsCount: number;
+};
+
+export type SplitTestPayload = {
+  questionsPerPart: number;
+};
+
+export type SplitTestResponse = {
+  totalParts: number;
+  createdTests: SavedTestResponse[];
+};
+
 export type TestListItem = {
   id: string;
   title: string;

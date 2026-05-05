@@ -1,9 +1,10 @@
 /* eslint-disable @next/next/no-img-element */
-'use client';
+"use client";
 
-import Link from 'next/link';
-import type { CSSProperties, FormEvent } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import type { CSSProperties, FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -14,7 +15,7 @@ import {
   RotateCcw,
   Trophy,
   XCircle,
-} from 'lucide-react';
+} from "lucide-react";
 import {
   ApiError,
   checkAnswer,
@@ -23,11 +24,13 @@ import {
   finishTest,
   getPublicLeaderboard,
   getPublicTestSummary,
+  savePublicTest,
+  splitPublicTest,
   startPublicTest,
   startTest,
-} from '@/lib/api';
-import { clearStoredSession, readStoredSession } from '@/lib/session';
-import { getSafeQuestionImageUrls } from '@/lib/images';
+} from "@/lib/api";
+import { clearStoredSession, readStoredSession } from "@/lib/session";
+import { getSafeQuestionImageUrls } from "@/lib/images";
 import type {
   AnswerCheckResponse,
   FinishResponse,
@@ -36,39 +39,47 @@ import type {
   StartedQuestion,
   StartedTest,
   StartedVariant,
-} from '@/lib/types';
+} from "@/lib/types";
 
 type AnswerMap = Record<string, string>;
 type FeedbackMap = Record<string, AnswerCheckResponse>;
-type RunnerMode = 'authenticated' | 'guest';
-type QuestionTransitionState = 'idle' | 'exiting' | 'entering';
+type RunnerMode = "authenticated" | "guest";
+type QuestionTransitionState = "idle" | "exiting" | "entering";
 
 const primaryButtonClass =
-  'inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-stone-300 disabled:text-stone-600';
+  "inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-stone-300 disabled:text-stone-600";
 const secondaryButtonClass =
-  'inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400';
+  "inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400";
 const POINTS_PER_CORRECT_ANSWER = 700;
 const QUESTION_TRANSITION_MS = 180;
 
 export function TestRunner({ testId }: { testId: string }) {
+  const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [mode, setMode] = useState<RunnerMode | null>(null);
   const [test, setTest] = useState<StartedTest | null>(null);
   const [summary, setSummary] = useState<PublicTestSummary | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [nickname, setNickname] = useState('');
+  const [nickname, setNickname] = useState("");
   const [answers, setAnswers] = useState<AnswerMap>({});
   const [feedback, setFeedback] = useState<FeedbackMap>({});
   const [currentIndex, setCurrentIndex] = useState(0);
   const [result, setResult] = useState<FinishResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
+  const [savingCopy, setSavingCopy] = useState(false);
+  const [splittingTest, setSplittingTest] = useState(false);
+  const [splitQuestionsPerPart, setSplitQuestionsPerPart] = useState("10");
   const [error, setError] = useState<string | null>(null);
   const [questionTransitionState, setQuestionTransitionState] =
-    useState<QuestionTransitionState>('idle');
-  const autoAdvanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useState<QuestionTransitionState>("idle");
+  const autoAdvanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const autoAdvancedQuestionRef = useRef<string | null>(null);
-  const questionTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const questionTransitionTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
 
   const clearAutoAdvance = useCallback(() => {
     if (autoAdvanceTimeoutRef.current) {
@@ -92,7 +103,7 @@ export function TestRunner({ testId }: { testId: string }) {
     setAnswers({});
     setFeedback({});
     setCurrentIndex(0);
-    setQuestionTransitionState('idle');
+    setQuestionTransitionState("idle");
     setResult(null);
     setChecking(false);
   }, [clearAutoAdvance, clearQuestionTransition]);
@@ -133,7 +144,7 @@ export function TestRunner({ testId }: { testId: string }) {
 
   const startRun = useCallback(
     async (nextMode: RunnerMode) => {
-      if (nextMode === 'authenticated' && !token) {
+      if (nextMode === "authenticated" && !token) {
         await loadGuestIntro();
         return;
       }
@@ -145,7 +156,7 @@ export function TestRunner({ testId }: { testId: string }) {
 
       try {
         const nextTest =
-          nextMode === 'authenticated'
+          nextMode === "authenticated"
             ? await startTest(token!, testId)
             : await startPublicTest(testId);
 
@@ -153,7 +164,7 @@ export function TestRunner({ testId }: { testId: string }) {
         setTest(nextTest);
         void refreshLeaderboard();
       } catch (loadError) {
-        if (nextMode === 'authenticated' && loadError instanceof ApiError) {
+        if (nextMode === "authenticated" && loadError instanceof ApiError) {
           if (loadError.status === 401) {
             clearStoredSession();
             await loadGuestIntro();
@@ -184,48 +195,144 @@ export function TestRunner({ testId }: { testId: string }) {
     void Promise.resolve().then(loadInitialState);
   }, [loadInitialState]);
 
+  useEffect(() => {
+    if (!summary) {
+      return;
+    }
+
+    setSplitQuestionsPerPart(
+      String(getDefaultSplitQuestionsPerPart(summary.questionsCount)),
+    );
+  }, [summary]);
+
+  const handleSaveCopy = useCallback(async () => {
+    if (!token || savingCopy) {
+      return;
+    }
+
+    setSavingCopy(true);
+    setError(null);
+
+    try {
+      const savedTest = await savePublicTest(token, testId);
+      router.push(`/tests/${savedTest.testId}`);
+    } catch (saveError) {
+      if (saveError instanceof ApiError && saveError.status === 401) {
+        clearStoredSession();
+        await loadGuestIntro();
+        return;
+      }
+
+      setError(getReadableError(saveError));
+    } finally {
+      setSavingCopy(false);
+    }
+  }, [loadGuestIntro, router, savingCopy, testId, token]);
+
+  const handleSplitTest = useCallback(async () => {
+    if (!token || !summary || splittingTest) {
+      return;
+    }
+
+    const parsedQuestionsPerPart = Number.parseInt(splitQuestionsPerPart, 10);
+
+    if (
+      !Number.isFinite(parsedQuestionsPerPart) ||
+      parsedQuestionsPerPart < 1
+    ) {
+      setError("Укажите корректное количество вопросов в части.");
+      return;
+    }
+
+    if (parsedQuestionsPerPart >= summary.questionsCount) {
+      setError("Размер части должен быть меньше общего количества вопросов.");
+      return;
+    }
+
+    setSplittingTest(true);
+    setError(null);
+
+    try {
+      await splitPublicTest(token, testId, {
+        questionsPerPart: parsedQuestionsPerPart,
+      });
+      router.push("/tests");
+    } catch (splitError) {
+      if (splitError instanceof ApiError && splitError.status === 401) {
+        clearStoredSession();
+        await loadGuestIntro();
+        return;
+      }
+
+      setError(getReadableError(splitError));
+    } finally {
+      setSplittingTest(false);
+    }
+  }, [
+    loadGuestIntro,
+    router,
+    splitQuestionsPerPart,
+    splittingTest,
+    summary,
+    testId,
+    token,
+  ]);
+
   const currentQuestion = test?.questions[currentIndex] ?? null;
-  const selectedVariantId = currentQuestion ? answers[currentQuestion.id] : undefined;
-  const currentFeedback = currentQuestion ? feedback[currentQuestion.id] : undefined;
+  const selectedVariantId = currentQuestion
+    ? answers[currentQuestion.id]
+    : undefined;
+  const currentFeedback = currentQuestion
+    ? feedback[currentQuestion.id]
+    : undefined;
   const answeredAll = useMemo(
     () =>
-      Boolean(test?.questions.length && test.questions.every((question) => answers[question.id])),
+      Boolean(
+        test?.questions.length &&
+        test.questions.every((question) => answers[question.id]),
+      ),
     [answers, test],
   );
   const correctAnswersCount = useMemo(
-    () => Object.values(feedback).filter((answerFeedback) => answerFeedback.isCorrect).length,
+    () =>
+      Object.values(feedback).filter(
+        (answerFeedback) => answerFeedback.isCorrect,
+      ).length,
     [feedback],
   );
   const currentPoints = correctAnswersCount * POINTS_PER_CORRECT_ANSWER;
   const maxPoints = (test?.questions.length ?? 0) * POINTS_PER_CORRECT_ANSWER;
   const questionTransitionClass =
-    questionTransitionState === 'idle'
-      ? 'translate-y-0 scale-100 opacity-100'
-      : questionTransitionState === 'exiting'
-        ? 'pointer-events-none translate-y-3 scale-[0.99] opacity-0'
-        : 'pointer-events-none -translate-y-3 scale-[0.99] opacity-0';
+    questionTransitionState === "idle"
+      ? "translate-y-0 scale-100 opacity-100"
+      : questionTransitionState === "exiting"
+        ? "pointer-events-none translate-y-3 scale-[0.99] opacity-0"
+        : "pointer-events-none -translate-y-3 scale-[0.99] opacity-0";
   const showCorrectReward = Boolean(currentFeedback?.isCorrect);
 
   const transitionToQuestion = useCallback(
     (nextIndex: number) => {
-      if (!test || questionTransitionState !== 'idle') {
+      if (!test || questionTransitionState !== "idle") {
         return;
       }
 
-      const clampedIndex = Math.min(Math.max(nextIndex, 0), test.questions.length - 1);
+      const clampedIndex = Math.min(
+        Math.max(nextIndex, 0),
+        test.questions.length - 1,
+      );
 
       if (clampedIndex === currentIndex) {
         return;
       }
 
       clearQuestionTransition();
-      setQuestionTransitionState('exiting');
+      setQuestionTransitionState("exiting");
       questionTransitionTimeoutRef.current = setTimeout(() => {
         setCurrentIndex(clampedIndex);
-        setQuestionTransitionState('entering');
+        setQuestionTransitionState("entering");
         questionTransitionTimeoutRef.current = setTimeout(() => {
           questionTransitionTimeoutRef.current = null;
-          setQuestionTransitionState('idle');
+          setQuestionTransitionState("idle");
         }, 20);
       }, QUESTION_TRANSITION_MS);
     },
@@ -235,11 +342,11 @@ export function TestRunner({ testId }: { testId: string }) {
   async function handleSelectAnswer(variantId: string) {
     if (
       !mode ||
-      (mode === 'authenticated' && !token) ||
+      (mode === "authenticated" && !token) ||
       !test ||
       !currentQuestion ||
       checking ||
-      questionTransitionState !== 'idle' ||
+      questionTransitionState !== "idle" ||
       currentFeedback
     ) {
       return;
@@ -256,7 +363,7 @@ export function TestRunner({ testId }: { testId: string }) {
 
     try {
       const answerFeedback =
-        mode === 'authenticated'
+        mode === "authenticated"
           ? await checkAnswer(token!, test.id, {
               questionId,
               variantId,
@@ -271,7 +378,11 @@ export function TestRunner({ testId }: { testId: string }) {
         [questionId]: answerFeedback,
       }));
     } catch (checkError) {
-      if (mode === 'authenticated' && checkError instanceof ApiError && checkError.status === 401) {
+      if (
+        mode === "authenticated" &&
+        checkError instanceof ApiError &&
+        checkError.status === 401
+      ) {
         clearStoredSession();
         await loadGuestIntro();
         return;
@@ -293,7 +404,12 @@ export function TestRunner({ testId }: { testId: string }) {
   }
 
   const handleFinish = useCallback(async () => {
-    if (!mode || (mode === 'authenticated' && !token) || !test || !answeredAll) {
+    if (
+      !mode ||
+      (mode === "authenticated" && !token) ||
+      !test ||
+      !answeredAll
+    ) {
       return;
     }
 
@@ -305,7 +421,7 @@ export function TestRunner({ testId }: { testId: string }) {
         variantId: answers[question.id],
       }));
       const finishResult =
-        mode === 'authenticated'
+        mode === "authenticated"
           ? await finishTest(token!, test.id, {
               answers: finishAnswers,
             })
@@ -318,7 +434,7 @@ export function TestRunner({ testId }: { testId: string }) {
       await refreshLeaderboard();
     } catch (finishError) {
       if (
-        mode === 'authenticated' &&
+        mode === "authenticated" &&
         finishError instanceof ApiError &&
         finishError.status === 401
       ) {
@@ -331,7 +447,16 @@ export function TestRunner({ testId }: { testId: string }) {
     } finally {
       setChecking(false);
     }
-  }, [answeredAll, answers, loadGuestIntro, mode, nickname, refreshLeaderboard, test, token]);
+  }, [
+    answeredAll,
+    answers,
+    loadGuestIntro,
+    mode,
+    nickname,
+    refreshLeaderboard,
+    test,
+    token,
+  ]);
 
   useEffect(() => {
     if (!test || !currentQuestion || !currentFeedback || result) {
@@ -372,19 +497,23 @@ export function TestRunner({ testId }: { testId: string }) {
     const trimmedNickname = nickname.trim();
 
     if (!trimmedNickname) {
-      setError('Введите ник, чтобы попасть в рейтинг.');
+      setError("Введите ник, чтобы попасть в рейтинг.");
       return;
     }
 
     setNickname(trimmedNickname);
-    await startRun('guest');
+    await startRun("guest");
   }
 
   if (loading) {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-stone-100 px-4 text-stone-900">
         <div className="flex items-center gap-3 rounded-md border border-stone-200 bg-white px-4 py-3 shadow-sm">
-          <Loader2 className="animate-spin text-teal-700" size={18} aria-hidden="true" />
+          <Loader2
+            className="animate-spin text-teal-700"
+            size={18}
+            aria-hidden="true"
+          />
           <span className="text-sm font-medium">Открываем тест</span>
         </div>
       </main>
@@ -398,8 +527,18 @@ export function TestRunner({ testId }: { testId: string }) {
           summary={summary}
           error={error}
           leaderboard={leaderboard}
+          savingCopy={savingCopy}
+          splittingTest={splittingTest}
+          splitQuestionsPerPart={splitQuestionsPerPart}
           onStart={() => {
-            void startRun('authenticated');
+            void startRun("authenticated");
+          }}
+          onSaveCopy={() => {
+            void handleSaveCopy();
+          }}
+          onSplitQuestionsPerPartChange={setSplitQuestionsPerPart}
+          onSplit={() => {
+            void handleSplitTest();
           }}
         />
       );
@@ -485,14 +624,18 @@ export function TestRunner({ testId }: { testId: string }) {
                   if (mode) {
                     void startRun(mode);
                   }
-                }}>
+                }}
+              >
                 <RotateCcw size={17} aria-hidden="true" />
                 Пройти снова
               </button>
             </div>
           </section>
 
-          <Leaderboard entries={leaderboard} currentAttemptId={result.attemptId} />
+          <Leaderboard
+            entries={leaderboard}
+            currentAttemptId={result.attemptId}
+          />
         </div>
       </main>
     );
@@ -507,7 +650,9 @@ export function TestRunner({ testId }: { testId: string }) {
               <FileQuestion size={20} aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h1 className="break-words text-lg font-semibold">{test.title}</h1>
+              <h1 className="break-words text-lg font-semibold">
+                {test.title}
+              </h1>
               <p className="text-sm text-stone-500">
                 Вопрос {currentIndex + 1} из {test.questions.length}
               </p>
@@ -530,7 +675,8 @@ export function TestRunner({ testId }: { testId: string }) {
         ) : null}
 
         <div
-          className={`transform-gpu transition-all duration-200 ease-out ${questionTransitionClass}`}>
+          className={`transform-gpu transition-all duration-200 ease-out ${questionTransitionClass}`}
+        >
           <QuestionStep
             question={currentQuestion}
             selectedVariantId={selectedVariantId}
@@ -542,32 +688,43 @@ export function TestRunner({ testId }: { testId: string }) {
       </section>
 
       {showCorrectReward ? (
-        <CorrectAnswerReward key={currentQuestion.id} points={POINTS_PER_CORRECT_ANSWER} />
+        <CorrectAnswerReward
+          key={currentQuestion.id}
+          points={POINTS_PER_CORRECT_ANSWER}
+        />
       ) : null}
     </main>
   );
 }
 
-function ScorePill({ points, maxPoints }: { points: number; maxPoints: number }) {
+function ScorePill({
+  points,
+  maxPoints,
+}: {
+  points: number;
+  maxPoints: number;
+}) {
   return (
     <div className="inline-flex min-h-10 items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-950">
       <Trophy className="text-amber-700" size={17} aria-hidden="true" />
       <span className="text-xs font-medium text-amber-700">Очки</span>
       <span>{formatPoints(points)}</span>
-      <span className="text-xs font-medium text-amber-700">/ {formatPoints(maxPoints)}</span>
+      <span className="text-xs font-medium text-amber-700">
+        / {formatPoints(maxPoints)}
+      </span>
     </div>
   );
 }
 
 const CONFETTI_PIECES = [
-  { x: -82, y: 34, rotate: -170, delay: 0, colorClass: 'bg-emerald-500' },
-  { x: -58, y: -12, rotate: -120, delay: 20, colorClass: 'bg-amber-400' },
-  { x: -34, y: 48, rotate: -80, delay: 40, colorClass: 'bg-teal-500' },
-  { x: -12, y: -26, rotate: -40, delay: 10, colorClass: 'bg-lime-500' },
-  { x: 14, y: 42, rotate: 55, delay: 30, colorClass: 'bg-sky-500' },
-  { x: 38, y: -16, rotate: 95, delay: 50, colorClass: 'bg-amber-500' },
-  { x: 66, y: 32, rotate: 135, delay: 15, colorClass: 'bg-emerald-600' },
-  { x: 88, y: -4, rotate: 180, delay: 35, colorClass: 'bg-teal-600' },
+  { x: -82, y: 34, rotate: -170, delay: 0, colorClass: "bg-emerald-500" },
+  { x: -58, y: -12, rotate: -120, delay: 20, colorClass: "bg-amber-400" },
+  { x: -34, y: 48, rotate: -80, delay: 40, colorClass: "bg-teal-500" },
+  { x: -12, y: -26, rotate: -40, delay: 10, colorClass: "bg-lime-500" },
+  { x: 14, y: 42, rotate: 55, delay: 30, colorClass: "bg-sky-500" },
+  { x: 38, y: -16, rotate: 95, delay: 50, colorClass: "bg-amber-500" },
+  { x: 66, y: 32, rotate: 135, delay: 15, colorClass: "bg-emerald-600" },
+  { x: 88, y: -4, rotate: 180, delay: 35, colorClass: "bg-teal-600" },
 ];
 
 function CorrectAnswerReward({ points }: { points: number }) {
@@ -575,7 +732,8 @@ function CorrectAnswerReward({ points }: { points: number }) {
     <div
       className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center overflow-visible px-4 pb-6 sm:pb-8"
       role="status"
-      aria-label={`+${formatPoints(points)} очков`}>
+      aria-label={`+${formatPoints(points)} очков`}
+    >
       <style>{`
         @keyframes correct-answer-reward-pop {
           0% {
@@ -602,9 +760,11 @@ function CorrectAnswerReward({ points }: { points: number }) {
       <div
         className="relative flex min-h-20 min-w-36 transform-gpu items-center justify-center overflow-visible px-6 py-3 text-4xl font-black text-emerald-700 sm:text-5xl"
         style={{
-          animation: 'correct-answer-reward-pop 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards',
-          willChange: 'transform, opacity',
-        }}>
+          animation:
+            "correct-answer-reward-pop 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards",
+          willChange: "transform, opacity",
+        }}
+      >
         <CorrectAnswerConfetti />
         <span className="relative z-10">+{formatPoints(points)}</span>
       </div>
@@ -616,7 +776,8 @@ function CorrectAnswerConfetti() {
   return (
     <div
       className="pointer-events-none absolute left-1/2 top-1/2 h-28 w-72 -translate-x-1/2 -translate-y-1/2 overflow-visible"
-      aria-hidden="true">
+      aria-hidden="true"
+    >
       <style>{`
         @keyframes correct-answer-confetti {
           0% {
@@ -641,10 +802,11 @@ function CorrectAnswerConfetti() {
           className={`absolute left-1/2 top-1/2 h-2.5 w-1.5 rounded-sm ${piece.colorClass}`}
           style={
             {
-              '--confetti-x': `${piece.x}px`,
-              '--confetti-y': `${piece.y}px`,
-              '--confetti-rotate': `${piece.rotate}deg`,
-              animation: 'correct-answer-confetti 850ms cubic-bezier(0.18, 0.85, 0.28, 1) forwards',
+              "--confetti-x": `${piece.x}px`,
+              "--confetti-y": `${piece.y}px`,
+              "--confetti-rotate": `${piece.rotate}deg`,
+              animation:
+                "correct-answer-confetti 850ms cubic-bezier(0.18, 0.85, 0.28, 1) forwards",
               animationDelay: `${piece.delay}ms`,
             } as CSSProperties
           }
@@ -658,12 +820,24 @@ function StartGate({
   summary,
   error,
   leaderboard,
+  savingCopy,
+  splittingTest,
+  splitQuestionsPerPart,
   onStart,
+  onSaveCopy,
+  onSplitQuestionsPerPartChange,
+  onSplit,
 }: {
   summary: PublicTestSummary;
   error: string | null;
   leaderboard: LeaderboardEntry[];
+  savingCopy: boolean;
+  splittingTest: boolean;
+  splitQuestionsPerPart: string;
   onStart: () => void;
+  onSaveCopy?: () => void;
+  onSplitQuestionsPerPartChange: (value: string) => void;
+  onSplit?: () => void;
 }) {
   return (
     <main className="min-h-dvh bg-stone-100 px-4 py-6 text-stone-950">
@@ -674,8 +848,12 @@ function StartGate({
               <FileQuestion size={20} aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h1 className="break-words text-xl font-semibold">{summary.title}</h1>
-              <p className="text-sm text-stone-500">{summary.questionsCount} вопросов</p>
+              <h1 className="break-words text-xl font-semibold">
+                {summary.title}
+              </h1>
+              <p className="text-sm text-stone-500">
+                {summary.questionsCount} вопросов
+              </p>
             </div>
           </div>
 
@@ -689,14 +867,83 @@ function StartGate({
             <button
               type="button"
               className={`${primaryButtonClass} w-full sm:w-auto`}
-              onClick={onStart}>
+              onClick={onStart}
+            >
               <PlayIcon />
               Начать тест
             </button>
-            <Link className={`${secondaryButtonClass} w-full sm:w-auto`} href="/">
+            {onSaveCopy ? (
+              <button
+                type="button"
+                className={`${secondaryButtonClass} w-full sm:w-auto`}
+                onClick={onSaveCopy}
+                disabled={savingCopy}
+              >
+                {savingCopy ? (
+                  <Loader2
+                    className="animate-spin"
+                    size={17}
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <CheckCircle2 size={17} aria-hidden="true" />
+                )}
+                {
+                  "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u0441\u0435\u0431\u0435"
+                }
+              </button>
+            ) : null}
+            <Link
+              className={`${secondaryButtonClass} w-full sm:w-auto`}
+              href="/"
+            >
               <Home size={17} aria-hidden="true" />В кабинет
             </Link>
           </div>
+
+          {onSplit ? (
+            <div className="mt-5 rounded-md border border-stone-200 bg-stone-50 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label className="block flex-1 space-y-1.5">
+                  <span className="text-xs font-medium uppercase tracking-normal text-stone-500">
+                    По сколько вопросов
+                  </span>
+                  <input
+                    className="min-h-10 w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm text-stone-950 outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-100"
+                    type="number"
+                    min={1}
+                    max={Math.max(summary.questionsCount - 1, 1)}
+                    inputMode="numeric"
+                    value={splitQuestionsPerPart}
+                    onChange={(event) =>
+                      onSplitQuestionsPerPartChange(event.target.value)
+                    }
+                    disabled={splittingTest}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className={`${secondaryButtonClass} w-full sm:w-auto`}
+                  onClick={onSplit}
+                  disabled={splittingTest || summary.questionsCount < 2}
+                >
+                  {splittingTest ? (
+                    <Loader2
+                      className="animate-spin"
+                      size={17}
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <CheckCircle2 size={17} aria-hidden="true" />
+                  )}
+                  Разделить на части
+                </button>
+              </div>
+              <p className="mt-2 text-sm text-stone-500">
+                Будут созданы новые тесты в вашем кабинете.
+              </p>
+            </div>
+          ) : null}
         </section>
 
         <Leaderboard entries={leaderboard} />
@@ -729,8 +976,12 @@ function NicknameGate({
               <FileQuestion size={20} aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h1 className="break-words text-xl font-semibold">{summary.title}</h1>
-              <p className="text-sm text-stone-500">{summary.questionsCount} вопросов</p>
+              <h1 className="break-words text-xl font-semibold">
+                {summary.title}
+              </h1>
+              <p className="text-sm text-stone-500">
+                {summary.questionsCount} вопросов
+              </p>
             </div>
           </div>
 
@@ -755,10 +1006,22 @@ function NicknameGate({
                 required
               />
             </label>
-            <button type="submit" className={`${primaryButtonClass} w-full sm:w-auto`}>
+            <button
+              type="submit"
+              className={`${primaryButtonClass} w-full sm:w-auto`}
+            >
               <PlayIcon />
               Начать тест
             </button>
+            <Link
+              className={`${secondaryButtonClass} w-full sm:w-auto`}
+              href="/"
+            >
+              <Home size={17} aria-hidden="true" />
+              {
+                "\u0412\u043e\u0439\u0442\u0438 \u0438 \u0440\u0430\u0437\u0434\u0435\u043b\u0438\u0442\u044c \u0441\u0435\u0431\u0435"
+              }
+            </Link>
           </form>
         </section>
 
@@ -804,14 +1067,17 @@ function Leaderboard({
               <div
                 key={entry.id}
                 className={`grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 py-3 ${
-                  isCurrent ? 'rounded-md bg-teal-50 px-2 text-teal-950' : ''
-                }`}>
+                  isCurrent ? "rounded-md bg-teal-50 px-2 text-teal-950" : ""
+                }`}
+              >
                 <span className="flex size-8 items-center justify-center rounded-md bg-stone-100 text-sm font-semibold text-stone-700">
                   {entry.rank}
                 </span>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">{entry.name}</p>
-                  <p className="text-xs text-stone-500">{formatDate(entry.createdAt)}</p>
+                  <p className="text-xs text-stone-500">
+                    {formatDate(entry.createdAt)}
+                  </p>
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-semibold">{entry.percent}%</p>
@@ -866,7 +1132,9 @@ function QuestionStep({
             feedback={feedback}
             checking={checking && selectedVariantId === variant.id && !feedback}
             disabled={Boolean(feedback) || checking}
-            concealed={Boolean(shownVariantIds && !shownVariantIds.has(variant.id))}
+            concealed={Boolean(
+              shownVariantIds && !shownVariantIds.has(variant.id),
+            )}
             onSelect={onSelect}
           />
         ))}
@@ -887,7 +1155,8 @@ function QuestionImageGallery({ imageUrls }: { imageUrls?: string[] }) {
       {safeImageUrls.map((imageUrl, index) => (
         <figure
           key={`${imageUrl.slice(0, 48)}-${index}`}
-          className="overflow-hidden rounded-md border border-stone-200 bg-white p-2 shadow-sm">
+          className="overflow-hidden rounded-md border border-stone-200 bg-white p-2 shadow-sm"
+        >
           <img
             className="max-h-[42dvh] w-full object-contain"
             src={imageUrl}
@@ -919,31 +1188,33 @@ function VariantOption({
   const isCorrect = feedback?.correctVariantId === variant.id;
   const isSelectedWrong = Boolean(feedback && selected && !feedback.isCorrect);
   const stateClass = isCorrect
-    ? 'border-emerald-400 bg-emerald-50 text-emerald-950 ring-1 ring-emerald-200'
+    ? "border-emerald-400 bg-emerald-50 text-emerald-950 ring-1 ring-emerald-200"
     : isSelectedWrong
-      ? 'border-red-400 bg-red-50 text-red-950 ring-1 ring-red-200'
+      ? "border-red-400 bg-red-50 text-red-950 ring-1 ring-red-200"
       : selected
-        ? 'border-teal-400 bg-teal-50 text-teal-950'
-        : 'border-stone-200 bg-white text-stone-900 hover:border-teal-300 hover:bg-stone-50';
+        ? "border-teal-400 bg-teal-50 text-teal-950"
+        : "border-stone-200 bg-white text-stone-900 hover:border-teal-300 hover:bg-stone-50";
   const statusIconClass = isCorrect
-    ? 'text-emerald-700'
+    ? "text-emerald-700"
     : isSelectedWrong
-      ? 'text-red-700'
+      ? "text-red-700"
       : selected || checking
-        ? 'text-teal-700'
-        : 'text-stone-400';
+        ? "text-teal-700"
+        : "text-stone-400";
 
   return (
     <button
       type="button"
       className={`relative flex min-h-16 w-full cursor-pointer items-center justify-center rounded-md border border-stone-300 px-12 py-4 text-center transition ${stateClass} ${
-        disabled ? 'cursor-default' : ''
-      } ${concealed ? 'invisible' : ''}`}
+        disabled ? "cursor-default" : ""
+      } ${concealed ? "invisible" : ""}`}
       onClick={() => onSelect(variant.id)}
       disabled={disabled}
-      aria-hidden={concealed}>
+      aria-hidden={concealed}
+    >
       <span
-        className={`absolute left-5 flex size-6 items-center justify-center transition ${statusIconClass}`}>
+        className={`absolute left-5 flex size-6 items-center justify-center transition ${statusIconClass}`}
+      >
         {checking ? (
           <Loader2 className="animate-spin" size={21} aria-hidden="true" />
         ) : isCorrect ? (
@@ -985,7 +1256,13 @@ function VariantImageGallery({ imageUrls }: { imageUrls?: string[] }) {
   );
 }
 
-function ResultMetric({ label, value }: { label: string; value: number | string }) {
+function ResultMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | string;
+}) {
   return (
     <div className="rounded-md border border-stone-200 bg-stone-50 p-4">
       <p className="text-sm text-stone-500">{label}</p>
@@ -995,13 +1272,13 @@ function ResultMetric({ label, value }: { label: string; value: number | string 
 }
 
 function formatPoints(value: number): string {
-  return new Intl.NumberFormat('ru-RU').format(value);
+  return new Intl.NumberFormat("ru-RU").format(value);
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat('ru-RU', {
-    dateStyle: 'short',
-    timeStyle: 'short',
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "short",
+    timeStyle: "short",
   }).format(new Date(value));
 }
 
@@ -1011,24 +1288,36 @@ function getReadableError(error: unknown): string {
   }
 
   if (error instanceof TypeError) {
-    return 'Не удалось подключиться к API. Проверьте адрес бэкенда.';
+    return "Не удалось подключиться к API. Проверьте адрес бэкенда.";
   }
 
   if (isAbortLikeError(error)) {
-    return 'Запрос к API был прерван. Повторите действие, когда бэкенд будет доступен.';
+    return "Запрос к API был прерван. Повторите действие, когда бэкенд будет доступен.";
   }
 
   if (error instanceof Error) {
     return error.message;
   }
 
-  return 'Неизвестная ошибка';
+  return "Неизвестная ошибка";
 }
 
 function isAbortLikeError(error: unknown): boolean {
   return (
-    typeof DOMException !== 'undefined' &&
+    typeof DOMException !== "undefined" &&
     error instanceof DOMException &&
-    (error.name === 'AbortError' || error.name === 'TimeoutError')
+    (error.name === "AbortError" || error.name === "TimeoutError")
   );
+}
+
+function getDefaultSplitQuestionsPerPart(questionsCount: number): number {
+  if (questionsCount <= 1) {
+    return 1;
+  }
+
+  if (questionsCount <= 10) {
+    return Math.max(1, Math.ceil(questionsCount / 2));
+  }
+
+  return 10;
 }

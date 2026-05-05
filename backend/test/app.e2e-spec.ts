@@ -27,8 +27,10 @@ type PreviewBody = {
   format: string;
   questions: Array<{
     text: string;
+    imageUrls?: string[];
     variants: Array<{
       text: string;
+      imageUrls?: string[];
       isCorrect: boolean;
     }>;
     warnings: string[];
@@ -47,9 +49,12 @@ type StartBody = {
   title: string;
   questions: Array<{
     id: string;
+    text: string;
+    imageUrls?: string[];
     variants: Array<{
       id: string;
       text: string;
+      imageUrls?: string[];
       isCorrect?: boolean;
     }>;
   }>;
@@ -62,6 +67,7 @@ type AnswerBody = {
 };
 
 type FinishBody = {
+  attemptId?: string;
   score: number;
   total: number;
   percent: number;
@@ -166,15 +172,25 @@ describe('Backend MVP (e2e)', () => {
 
     expect(started.questions[0].variants[0]).not.toHaveProperty('isCorrect');
 
-    const firstQuestion = started.questions[0];
-    const firstVariant = firstQuestion.variants[0];
+    const firstQuestion = started.questions.find((question) =>
+      question.text.includes('HTTP'),
+    );
+
+    expect(firstQuestion).toBeDefined();
+
+    const firstVariant = firstQuestion!.variants.find(
+      (variant) => variant.text === 'Hypertext transfer protocol',
+    );
+
+    expect(firstVariant).toBeDefined();
+
     const checked = (
       await request(app.getHttpServer())
         .post(`/tests/${confirm.testId}/check-answer`)
         .set('Authorization', `Bearer ${auth.accessToken}`)
         .send({
-          questionId: firstQuestion.id,
-          variantId: firstVariant.id,
+          questionId: firstQuestion!.id,
+          variantId: firstVariant!.id,
         })
         .expect(200)
     ).body as AnswerBody;
@@ -187,19 +203,30 @@ describe('Backend MVP (e2e)', () => {
         .post(`/tests/${confirm.testId}/finish`)
         .set('Authorization', `Bearer ${auth.accessToken}`)
         .send({
-          answers: started.questions.map((question) => ({
-            questionId: question.id,
-            variantId: question.variants[0].id,
-          })),
+          answers: started.questions.map((question) => {
+            const correctVariant = question.variants.find((variant) =>
+              isCorrectVariantText(question.text, variant.text),
+            );
+
+            if (!correctVariant) {
+              throw new Error(
+                `Correct variant not found for question "${question.text}"`,
+              );
+            }
+
+            return {
+              questionId: question.id,
+              variantId: correctVariant.id,
+            };
+          }),
         })
         .expect(200)
     ).body as FinishBody;
 
-    expect(finish).toEqual({
-      score: 2,
-      total: 2,
-      percent: 100,
-    });
+    expect(finish.score).toBe(2);
+    expect(finish.total).toBe(2);
+    expect(finish.percent).toBe(100);
+    expect(finish.attemptId).toBeDefined();
   });
 
   it('does not expose uploaded files or tests across users', async () => {
@@ -245,6 +272,157 @@ describe('Backend MVP (e2e)', () => {
       .expect(404);
   });
 
+  it('allows another authenticated user to save a shared test into their own account', async () => {
+    const owner = await register('shared-owner@example.com');
+    const receiver = await register('shared-receiver@example.com');
+
+    const preview = (
+      await request(app.getHttpServer())
+        .post('/import/file-preview')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .attach('file', Buffer.from(sampleRawText(), 'utf8'), {
+          filename: 'shared.txt',
+          contentType: 'text/plain',
+        })
+        .expect(200)
+    ).body as PreviewBody;
+
+    const original = (
+      await request(app.getHttpServer())
+        .post('/import/confirm')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({
+          title: 'Shared test',
+          sourceFileId: preview.file.id,
+          questions: preview.questions,
+        })
+        .expect(201)
+    ).body as ConfirmBody;
+
+    const copied = (
+      await request(app.getHttpServer())
+        .post(`/public/tests/${original.testId}/save`)
+        .set('Authorization', `Bearer ${receiver.accessToken}`)
+        .expect(201)
+    ).body as ConfirmBody;
+
+    expect(copied.title).toBe('Shared test');
+    expect(copied.questionsCount).toBe(2);
+    expect(copied.testId).not.toBe(original.testId);
+
+    await request(app.getHttpServer())
+      .get('/tests')
+      .set('Authorization', `Bearer ${receiver.accessToken}`)
+      .expect(200)
+      .expect((response) => {
+        const body = response.body as Array<{ id: string }>;
+        expect(body).toHaveLength(1);
+        expect(body[0].id).toBe(copied.testId);
+      });
+
+    await request(app.getHttpServer())
+      .get(`/tests/${copied.testId}`)
+      .set('Authorization', `Bearer ${receiver.accessToken}`)
+      .expect(200)
+      .expect((response) => {
+        const body = response.body as {
+          questions: Array<{
+            text: string;
+            variants: Array<{
+              text: string;
+              isCorrect: boolean;
+            }>;
+          }>;
+        };
+        expect(body.questions).toHaveLength(2);
+        expect(body.questions[0].text).toBe('What is HTTP?');
+        expect(body.questions[0].variants[0].isCorrect).toBe(true);
+      });
+
+    await request(app.getHttpServer())
+      .post(`/tests/${copied.testId}/start`)
+      .set('Authorization', `Bearer ${receiver.accessToken}`)
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get(`/tests/${original.testId}`)
+      .set('Authorization', `Bearer ${receiver.accessToken}`)
+      .expect(404);
+  });
+
+  it('allows another authenticated user to split a shared test into smaller tests', async () => {
+    const owner = await register('split-owner@example.com');
+    const receiver = await register('split-receiver@example.com');
+
+    const preview = (
+      await request(app.getHttpServer())
+        .post('/import/file-preview')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .attach('file', Buffer.from(sampleRawText(), 'utf8'), {
+          filename: 'split.txt',
+          contentType: 'text/plain',
+        })
+        .expect(200)
+    ).body as PreviewBody;
+
+    const original = (
+      await request(app.getHttpServer())
+        .post('/import/confirm')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({
+          title: 'Split test',
+          sourceFileId: preview.file.id,
+          questions: preview.questions,
+        })
+        .expect(201)
+    ).body as ConfirmBody;
+
+    const split = (
+      await request(app.getHttpServer())
+        .post(`/public/tests/${original.testId}/split`)
+        .set('Authorization', `Bearer ${receiver.accessToken}`)
+        .send({
+          questionsPerPart: 1,
+        })
+        .expect(201)
+    ).body as {
+      totalParts: number;
+      createdTests: Array<ConfirmBody>;
+    };
+
+    expect(split.totalParts).toBe(2);
+    expect(split.createdTests).toHaveLength(2);
+    expect(split.createdTests[0].questionsCount).toBe(1);
+    expect(split.createdTests[1].questionsCount).toBe(1);
+
+    await request(app.getHttpServer())
+      .get('/tests')
+      .set('Authorization', `Bearer ${receiver.accessToken}`)
+      .expect(200)
+      .expect((response) => {
+        const body = response.body as Array<{ id: string }>;
+        expect(body).toHaveLength(2);
+        expect(body.map((test) => test.id).sort()).toEqual(
+          split.createdTests.map((test) => test.testId).sort(),
+        );
+      });
+
+    for (const createdTest of split.createdTests) {
+      await request(app.getHttpServer())
+        .get(`/tests/${createdTest.testId}`)
+        .set('Authorization', `Bearer ${receiver.accessToken}`)
+        .expect(200)
+        .expect((response) => {
+          const body = response.body as {
+            title: string;
+            questions: Array<{ text: string }>;
+          };
+          expect(body.title).toContain('Split test');
+          expect(body.questions).toHaveLength(1);
+        });
+    }
+  });
+
   it('accepts a larger confirm payload with embedded images', async () => {
     const auth = await register('images@example.com');
 
@@ -277,6 +455,88 @@ describe('Backend MVP (e2e)', () => {
     ).body as ConfirmBody;
 
     expect(confirm.questionsCount).toBe(2);
+  });
+
+  it('preserves question and variant image urls through preview, import, and start', async () => {
+    const auth = await register('relative-images@example.com');
+    const questionImageUrl = '/media/imported-tests/aa/question.png';
+    const variantImageUrl = '/media/imported-tests/bb/variant.png';
+
+    const preview = (
+      await request(app.getHttpServer())
+        .post('/import/file-preview')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .attach(
+          'file',
+          Buffer.from(
+            `
+<question> Choose the correct scheme
+[[image:${questionImageUrl}]]
+<variant> [[image:${variantImageUrl}]]
+<variant> Text answer
+`,
+            'utf8',
+          ),
+          {
+            filename: 'relative-images.txt',
+            contentType: 'text/plain',
+          },
+        )
+        .field('format', 'TAGGED_FIRST_CORRECT')
+        .expect(200)
+    ).body as PreviewBody;
+
+    expect(preview.questions).toHaveLength(1);
+    expect(preview.questions[0].imageUrls).toEqual([questionImageUrl]);
+    expect(preview.questions[0].variants[0].imageUrls).toEqual([
+      variantImageUrl,
+    ]);
+
+    const confirm = (
+      await request(app.getHttpServer())
+        .post('/import/confirm')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .send({
+          title: 'Relative image test',
+          sourceFileId: preview.file.id,
+          questions: preview.questions,
+        })
+        .expect(201)
+    ).body as ConfirmBody;
+
+    const detail = await request(app.getHttpServer())
+      .get(`/tests/${confirm.testId}`)
+      .set('Authorization', `Bearer ${auth.accessToken}`)
+      .expect(200);
+    const detailBody = detail.body as {
+      questions: Array<{
+        imageUrls?: string[];
+        variants: Array<{
+          imageUrls?: string[];
+        }>;
+      }>;
+    };
+
+    expect(detailBody.questions[0].imageUrls).toEqual([questionImageUrl]);
+    expect(detailBody.questions[0].variants[0].imageUrls).toEqual([
+      variantImageUrl,
+    ]);
+
+    const started = (
+      await request(app.getHttpServer())
+        .post(`/tests/${confirm.testId}/start`)
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .expect(200)
+    ).body as StartBody;
+
+    expect(started.questions[0].imageUrls).toEqual([questionImageUrl]);
+    expect(
+      started.questions[0].variants.some(
+        (variant) =>
+          Array.isArray(variant.imageUrls) &&
+          variant.imageUrls.includes(variantImageUrl),
+      ),
+    ).toBe(true);
   });
 
   async function register(email: string): Promise<AuthBody> {
@@ -315,5 +575,20 @@ B) Backend framework
 C) Database
 D) Server
 `;
+  }
+
+  function isCorrectVariantText(
+    questionText: string,
+    variantText: string,
+  ): boolean {
+    if (questionText.includes('HTTP')) {
+      return variantText === 'Hypertext transfer protocol';
+    }
+
+    if (questionText.includes('CSS')) {
+      return variantText === 'Style language';
+    }
+
+    return false;
   }
 });

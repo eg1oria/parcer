@@ -40,9 +40,11 @@
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.7.284",
     "pg": "^8.20.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "sharp": "^0.34.5",
     "word-extractor": "^1.0.4"
   },
   "devDependencies": {

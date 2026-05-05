@@ -12,6 +12,9 @@ import type {
   ParseFormat,
   PublicFinishPayload,
   PublicTestSummary,
+  SavedTestResponse,
+  SplitTestPayload,
+  SplitTestResponse,
   StartedTest,
   TestListItem,
 } from "./types";
@@ -34,7 +37,7 @@ type PreviewImportPayload = {
 };
 
 const API_REQUEST_TIMEOUT_MS = 30000;
-const IMPORT_REQUEST_TIMEOUT_MS = 120000;
+const IMPORT_REQUEST_TIMEOUT_MS = 300000;
 
 export class ApiError extends Error {
   constructor(
@@ -133,6 +136,28 @@ export async function getPublicLeaderboard(
 export async function startPublicTest(testId: string): Promise<StartedTest> {
   return apiRequest<StartedTest>(`/public/tests/${testId}/start`, {
     method: "POST",
+  });
+}
+
+export async function savePublicTest(
+  token: string,
+  testId: string,
+): Promise<SavedTestResponse> {
+  return apiRequest<SavedTestResponse>(`/public/tests/${testId}/save`, {
+    method: "POST",
+    token,
+  });
+}
+
+export async function splitPublicTest(
+  token: string,
+  testId: string,
+  payload: SplitTestPayload,
+): Promise<SplitTestResponse> {
+  return apiRequest<SplitTestResponse>(`/public/tests/${testId}/split`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload),
   });
 }
 
@@ -272,10 +297,7 @@ function createRequestSignal(
   }
 
   const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(
-    () => controller.abort(),
-    timeoutMs,
-  );
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
 
   return {
     signal: controller.signal,

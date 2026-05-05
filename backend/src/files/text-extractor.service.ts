@@ -1,54 +1,129 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { extname } from 'node:path';
+import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { extname, join } from 'node:path';
+import { promisify } from 'node:util';
 import JSZip from 'jszip';
 import * as mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
+import sharp from 'sharp';
 import WordExtractor from 'word-extractor';
 import { getPositiveIntConfig } from '../common/config/env-number';
 import {
+  IMPORTED_IMAGE_ROUTE_PREFIX,
+  IMPORTED_IMAGE_STORAGE_PATH,
   MAX_UPLOAD_FILE_SIZE_BYTES,
   SUPPORTED_FILE_EXTENSIONS,
   SUPPORTED_MIME_TYPES,
 } from './files.constants';
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { writeFile, readFile, unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 const execFileAsync = promisify(execFile);
 
-const IMAGE_MARKER_PATTERN = /\[\[image:[^\]]+\]\]/g;
-const PDF_IMAGE_THRESHOLD_PX = 16;
 const DOCX_IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   '.bmp': 'image/bmp',
+  '.dib': 'image/bmp',
+  '.emf': 'image/emf',
   '.gif': 'image/gif',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
+  '.ico': 'image/x-icon',
   '.jfif': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.jpg': 'image/jpeg',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
   '.webp': 'image/webp',
-  '.wmf': 'image/x-wmf',
-  '.emf': 'image/x-emf',
+  '.wmf': 'image/wmf',
 };
 
-type PdfTextPage = {
-  num: number;
+const WEB_SAFE_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'image/svg+xml',
+]);
+
+const ALWAYS_CONVERT_TO_PNG_EXTENSIONS = new Set([
+  '.dib',
+  '.emf',
+  '.heic',
+  '.heif',
+  '.ico',
+  '.tif',
+  '.tiff',
+  '.wmf',
+]);
+
+const PDF_IMAGE_MIN_SIZE_PX = 20;
+const PDF_LINE_Y_THRESHOLD = 5;
+const PDF_SAME_ROW_THRESHOLD = 4;
+const PDF_TEXT_GAP_THRESHOLD = 2;
+const DEFAULT_PDF_IMAGE_EXTRACTION_TIMEOUT_MS = 15_000;
+const EXTERNAL_IMAGE_CONVERSION_TIMEOUT_MS = 20_000;
+const LEGACY_DOC_CONVERSION_TIMEOUT_MS = 30_000;
+
+type PdfTextItem = {
   text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  hasEOL: boolean;
 };
 
-type PdfImagePage = {
-  pageNumber: number;
-  images: Array<{
-    dataUrl?: string;
-  }>;
+type PdfLine = {
+  text: string;
+  baseline: number;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
 };
+
+type PdfImagePlacement = {
+  url: string;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+};
+
+type ResolvedPdfImage = {
+  name: string;
+  width: number;
+  height: number;
+  kind: number;
+  data: Uint8Array;
+};
+
+type StructuredDocxText = {
+  text: string;
+  imageCount: number;
+  mathCount: number;
+};
+
+type PdfJsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 
 @Injectable()
 export class TextExtractorService {
+  private readonly logger = new Logger(TextExtractorService.name);
+  private pdfJsPromise: Promise<PdfJsModule> | null = null;
+
   constructor(private readonly configService: ConfigService) {}
 
   async extractText(file: Express.Multer.File): Promise<string> {
@@ -57,32 +132,25 @@ export class TextExtractorService {
     const extension = this.getExtension(file.originalname);
     let extractedText = '';
 
-    if (extension === '.txt') {
-      extractedText = file.buffer.toString('utf8');
+    switch (extension) {
+      case '.txt':
+        extractedText = file.buffer.toString('utf8');
+        break;
+      case '.docx':
+        extractedText = await this.extractDocxText(file.buffer);
+        break;
+      case '.doc':
+        extractedText = await this.extractDocText(file.buffer);
+        break;
+      case '.pdf':
+        extractedText = await this.extractPdfText(file.buffer);
+        break;
+      default:
+        extractedText = '';
+        break;
     }
 
-    if (extension === '.docx') {
-      extractedText = await this.extractDocxText(file.buffer);
-    }
-
-    if (extension === '.doc') {
-      extractedText = await this.extractDocText(file.buffer);
-    }
-
-    if (extension === '.pdf') {
-      const parser = new PDFParse({ data: file.buffer });
-
-      try {
-        extractedText = await this.extractPdfTextWithImages(parser);
-      } finally {
-        await parser.destroy();
-      }
-    }
-
-    const normalizedText = extractedText
-      .replace(/^\uFEFF/, '')
-      .replace(/\r\n/g, '\n')
-      .trim();
+    const normalizedText = this.normalizeExtractedText(extractedText);
 
     if (!normalizedText) {
       throw new BadRequestException('Could not extract text from file');
@@ -91,83 +159,82 @@ export class TextExtractorService {
     return normalizedText;
   }
 
-  private async convertWmfToPngBase64(
-    wmfBuffer: Buffer,
-    ext: string,
-  ): Promise<string | null> {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const inputPath = join(tmpdir(), `img-${id}${ext}`);
-    const outputPath = join(tmpdir(), `img-${id}.png`);
-
-    try {
-      await writeFile(inputPath, wmfBuffer);
-      await execFileAsync('convert', [inputPath, outputPath], {
-        timeout: 10_000,
-      });
-      const pngBuffer = await readFile(outputPath);
-      return `data:image/png;base64,${pngBuffer.toString('base64')}`;
-    } catch {
-      return null;
-    } finally {
-      await Promise.allSettled([unlink(inputPath), unlink(outputPath)]);
-    }
-  }
-
-  private async extractPdfTextWithImages(parser: PDFParse): Promise<string> {
-    const textResult = await parser.getText({ pageJoiner: '\n\n' });
-
-    if (!/<question>/i.test(textResult.text)) {
-      return textResult.text;
+  validateFile(
+    file: Express.Multer.File | undefined,
+  ): asserts file is Express.Multer.File {
+    if (!file) {
+      throw new BadRequestException('File is required');
     }
 
-    try {
-      const imageResult = await parser.getImage({
-        imageBuffer: false,
-        imageDataUrl: true,
-        imageThreshold: PDF_IMAGE_THRESHOLD_PX,
-      });
+    if (!file.buffer || file.buffer.length === 0) {
+      throw new BadRequestException('File is empty');
+    }
 
-      return this.injectPdfImagesIntoTaggedText(
-        textResult.pages,
-        imageResult.pages,
-        textResult.text,
+    const maxUploadSizeBytes = this.maxUploadSizeBytes();
+
+    if (file.size > maxUploadSizeBytes) {
+      throw new BadRequestException(
+        `File is too large. Max size is ${maxUploadSizeBytes} bytes`,
       );
-    } catch {
-      return textResult.text;
+    }
+
+    const extension = this.getExtension(file.originalname);
+
+    if (!SUPPORTED_FILE_EXTENSIONS.includes(extension as never)) {
+      throw new BadRequestException('Unsupported file extension');
+    }
+
+    if (!SUPPORTED_MIME_TYPES.includes(file.mimetype as never)) {
+      throw new BadRequestException('Unsupported file mime type');
     }
   }
 
   private async extractDocxText(buffer: Buffer): Promise<string> {
-    const result = await mammoth.convertToHtml({ buffer });
-    const textWithImages = this.htmlToTextWithImages(result.value);
-
     try {
-      const mathAwareResult = await this.extractDocxStructuredText(buffer);
+      const structuredText = await this.extractDocxStructuredText(buffer);
 
-      if (mathAwareResult.mathCount === 0 && mathAwareResult.imageCount === 0) {
-        return textWithImages;
+      if (structuredText.text.trim().length > 0) {
+        return structuredText.text;
       }
-
-      const mergedText = this.mergeDocxTextWithMath(
-        textWithImages,
-        mathAwareResult.text,
+    } catch (error) {
+      this.logger.warn(
+        `Structured DOCX extraction failed, falling back to Mammoth: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
       );
-
-      if (
-        mathAwareResult.mathCount > 0 ||
-        this.countTaggedVariantsWithContent(mergedText) >
-          this.countTaggedVariantsWithContent(textWithImages)
-      ) {
-        return mergedText;
-      }
-
-      return textWithImages;
-    } catch {
-      return textWithImages;
     }
+
+    const fallback = await mammoth.convertToHtml({ buffer });
+
+    return this.htmlToTextWithImages(fallback.value);
+  }
+
+  private async extractDocxStructuredText(
+    buffer: Buffer,
+  ): Promise<StructuredDocxText> {
+    const zip = await JSZip.loadAsync(buffer);
+    const documentXml = await zip.file('word/document.xml')?.async('string');
+
+    if (!documentXml) {
+      return { text: '', imageCount: 0, mathCount: 0 };
+    }
+
+    const imageMarkers = await this.extractDocxImageMarkers(
+      zip,
+      'word/document.xml',
+      'word/_rels/document.xml.rels',
+    );
+
+    return this.docxXmlToText(documentXml, imageMarkers);
   }
 
   private async extractDocText(buffer: Buffer): Promise<string> {
+    const convertedDocxBuffer = await this.tryConvertLegacyDocToDocx(buffer);
+
+    if (convertedDocxBuffer) {
+      return this.extractDocxText(convertedDocxBuffer);
+    }
+
     const extractor = new WordExtractor();
     const document = await extractor.extract(buffer);
 
@@ -175,58 +242,646 @@ export class TextExtractorService {
       document.getBody(),
       document.getTextboxes({ includeHeadersAndFooters: false }),
     ]
-      .filter((segment) => segment.trim().length > 0)
+      .map((segment) => segment.trim())
+      .filter(Boolean)
       .join('\n\n');
   }
 
-  private htmlToTextWithImages(html: string): string {
-    return this.decodeHtmlEntities(
-      html
-        .replace(
-          /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>/gi,
-          (_match, doubleQuotedSrc, singleQuotedSrc, unquotedSrc) =>
-            `\n[[image:${doubleQuotedSrc ?? singleQuotedSrc ?? unquotedSrc ?? ''}]]\n`,
-        )
-        .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/(?:p|div|li|h[1-6]|td|th|tr)>/gi, '\n')
-        .replace(/<[^>]+>/g, ' '),
-    )
-      .replace(/\u00a0/g, ' ')
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n[ \t]+/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+  private async tryConvertLegacyDocToDocx(
+    buffer: Buffer,
+  ): Promise<Buffer | null> {
+    const tempDir = await mkdtemp(join(tmpdir(), 'legacy-doc-import-'));
+    const inputPath = join(tempDir, 'source.doc');
+    const outputDir = join(tempDir, 'converted');
+    const outputPath = join(outputDir, 'source.docx');
+
+    await mkdir(outputDir, { recursive: true });
+
+    try {
+      await writeFile(inputPath, buffer);
+
+      const commandSucceeded = await this.tryRunCommand(
+        'soffice',
+        [
+          '--headless',
+          '--convert-to',
+          'docx',
+          '--outdir',
+          outputDir,
+          inputPath,
+        ],
+        LEGACY_DOC_CONVERSION_TIMEOUT_MS,
+      );
+
+      if (!commandSucceeded || !(await this.fileExists(outputPath))) {
+        return null;
+      }
+
+      return readFile(outputPath);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   }
 
-  private async extractDocxStructuredText(
-    buffer: Buffer,
-  ): Promise<{ text: string; mathCount: number; imageCount: number }> {
-    const zip = await JSZip.loadAsync(buffer);
-    const documentXml = await zip.file('word/document.xml')?.async('string');
+  private async extractPdfText(buffer: Buffer): Promise<string> {
+    const pdfjs = await this.getPdfJs();
+    const loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      verbosity: pdfjs.VerbosityLevel.ERRORS,
+    });
 
-    if (!documentXml) {
-      return { text: '', mathCount: 0, imageCount: 0 };
+    const doc = await loadingTask.promise;
+    const pdfImageCache = new Map<string, string>();
+    const pages: string[] = [];
+    const imageExtractionDeadline =
+      Date.now() + this.pdfImageExtractionTimeoutMs();
+
+    try {
+      for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+        const page = await doc.getPage(pageNumber);
+
+        try {
+          const textItems = await this.extractPdfPageTextItems(page);
+          const lines = this.groupPdfTextItemsIntoLines(textItems);
+          const remainingImageBudgetMs = imageExtractionDeadline - Date.now();
+          const images =
+            remainingImageBudgetMs > 0
+              ? await this.withTimeout(
+                  this.extractPdfPageImages(pdfjs, doc, page, pdfImageCache),
+                  remainingImageBudgetMs,
+                  [],
+                )
+              : [];
+
+          pages.push(this.mergePdfPageContent(lines, images));
+        } finally {
+          page.cleanup();
+        }
+      }
+    } finally {
+      await doc.destroy();
+      await loadingTask.destroy();
     }
 
-    const imageMarkersByRelationshipId =
-      await this.extractDocxImageMarkers(zip);
+    return pages.filter(Boolean).join('\n\n');
+  }
 
-    return this.docxXmlToTextWithMath(
-      documentXml,
-      imageMarkersByRelationshipId,
+  private async extractPdfPageTextItems(page: any): Promise<PdfTextItem[]> {
+    const viewport = page.getViewport({ scale: 1 });
+    const textContent = await page.getTextContent({
+      includeMarkedContent: false,
+      disableNormalization: false,
+    });
+    const items: PdfTextItem[] = [];
+
+    for (const item of textContent.items as Array<Record<string, unknown>>) {
+      if (!('str' in item) || typeof item.str !== 'string') {
+        continue;
+      }
+
+      const transform = Array.isArray(item.transform)
+        ? (item.transform as number[])
+        : [1, 0, 0, 1, 0, 0];
+      const [x, y] = viewport.convertToViewportPoint(
+        transform[4] ?? 0,
+        transform[5] ?? 0,
+      );
+      const width =
+        typeof item.width === 'number' ? Math.abs(item.width) : item.str.length;
+      const height =
+        typeof item.height === 'number'
+          ? Math.abs(item.height)
+          : PDF_LINE_Y_THRESHOLD;
+
+      items.push({
+        text: item.str,
+        x,
+        y,
+        width,
+        height,
+        hasEOL: Boolean(item.hasEOL),
+      });
+    }
+
+    return items;
+  }
+
+  private groupPdfTextItemsIntoLines(items: PdfTextItem[]): PdfLine[] {
+    const lines: PdfLine[] = [];
+    let forceBreakNext = false;
+
+    for (const item of items) {
+      const lastLine = lines.at(-1);
+      const lineThreshold = Math.max(
+        PDF_LINE_Y_THRESHOLD,
+        Math.min(item.height, 12),
+      );
+      const startsNewLine =
+        forceBreakNext ||
+        !lastLine ||
+        Math.abs(lastLine.baseline - item.y) > lineThreshold;
+
+      if (startsNewLine) {
+        lines.push({
+          text: item.text,
+          baseline: item.y,
+          left: item.x,
+          right: item.x + item.width,
+          top: item.y - item.height,
+          bottom: item.y,
+        });
+      } else {
+        lastLine.text += this.getPdfTextJoiner(
+          lastLine.text,
+          item.text,
+          item.x - lastLine.right,
+        );
+        lastLine.text += item.text;
+        lastLine.right = Math.max(lastLine.right, item.x + item.width);
+        lastLine.top = Math.min(lastLine.top, item.y - item.height);
+        lastLine.bottom = Math.max(lastLine.bottom, item.y);
+      }
+
+      forceBreakNext = item.hasEOL || item.text.endsWith('\n');
+    }
+
+    return lines
+      .map((line) => ({
+        ...line,
+        text: line.text.replace(/\s+\n/g, '\n').trim(),
+      }))
+      .filter((line) => line.text.length > 0);
+  }
+
+  private getPdfTextJoiner(
+    previousText: string,
+    nextText: string,
+    gap: number,
+  ): string {
+    if (
+      gap <= PDF_TEXT_GAP_THRESHOLD ||
+      previousText.length === 0 ||
+      nextText.length === 0
+    ) {
+      return '';
+    }
+
+    if (
+      /\s$/.test(previousText) ||
+      /^\s/.test(nextText) ||
+      /^[,.;:!?)}\]]/.test(nextText) ||
+      /[([{/-]$/.test(previousText)
+    ) {
+      return '';
+    }
+
+    return ' ';
+  }
+
+  private async extractPdfPageImages(
+    pdfjs: PdfJsModule,
+    doc: any,
+    page: any,
+    pdfImageCache: Map<string, string>,
+  ): Promise<PdfImagePlacement[]> {
+    const viewport = page.getViewport({ scale: 1 });
+    const operatorList = await page.getOperatorList();
+    let transformMatrix = [1, 0, 0, 1, 0, 0];
+    const transformStack: Array<number[]> = [];
+    const images: PdfImagePlacement[] = [];
+
+    for (let index = 0; index < operatorList.fnArray.length; index += 1) {
+      const fn = operatorList.fnArray[index];
+      const args = operatorList.argsArray[index];
+
+      if (fn === pdfjs.OPS.save) {
+        transformStack.push([...transformMatrix]);
+        continue;
+      }
+
+      if (fn === pdfjs.OPS.restore) {
+        const restoredMatrix = transformStack.pop();
+
+        if (restoredMatrix) {
+          transformMatrix = restoredMatrix;
+        }
+
+        continue;
+      }
+
+      if (fn === pdfjs.OPS.transform) {
+        transformMatrix = pdfjs.Util.transform(transformMatrix, args);
+        continue;
+      }
+
+      if (fn === pdfjs.OPS.paintInlineImageXObject) {
+        const image = this.normalizeResolvedPdfImage(
+          `inline-${index}`,
+          args?.[0],
+        );
+
+        if (!image) {
+          continue;
+        }
+
+        const placement = await this.buildPdfImagePlacement(
+          pdfjs,
+          doc,
+          image,
+          transformMatrix,
+          viewport,
+          pdfImageCache,
+        );
+
+        if (placement) {
+          images.push(placement);
+        }
+
+        continue;
+      }
+
+      if (fn === pdfjs.OPS.paintImageXObject) {
+        const name = args?.[0];
+
+        if (typeof name !== 'string') {
+          continue;
+        }
+
+        const image =
+          (await this.resolvePdfEmbeddedImage(page.commonObjs, name)) ??
+          (await this.resolvePdfEmbeddedImage(page.objs, name));
+
+        if (!image) {
+          continue;
+        }
+
+        const placement = await this.buildPdfImagePlacement(
+          pdfjs,
+          doc,
+          image,
+          transformMatrix,
+          viewport,
+          pdfImageCache,
+        );
+
+        if (placement) {
+          images.push(placement);
+        }
+
+        continue;
+      }
+
+      if (fn === pdfjs.OPS.paintImageXObjectRepeat) {
+        const name = args?.[0];
+        const scaleX = args?.[1];
+        const scaleY = args?.[2];
+        const positions = args?.[3];
+
+        if (
+          typeof name !== 'string' ||
+          typeof scaleX !== 'number' ||
+          typeof scaleY !== 'number' ||
+          !Array.isArray(positions)
+        ) {
+          continue;
+        }
+
+        const image =
+          (await this.resolvePdfEmbeddedImage(page.commonObjs, name)) ??
+          (await this.resolvePdfEmbeddedImage(page.objs, name));
+
+        if (!image) {
+          continue;
+        }
+
+        for (
+          let positionIndex = 0;
+          positionIndex < positions.length;
+          positionIndex += 2
+        ) {
+          const repeatTransform = pdfjs.Util.transform(transformMatrix, [
+            scaleX,
+            0,
+            0,
+            scaleY,
+            positions[positionIndex] ?? 0,
+            positions[positionIndex + 1] ?? 0,
+          ]);
+          const placement = await this.buildPdfImagePlacement(
+            pdfjs,
+            doc,
+            image,
+            repeatTransform,
+            viewport,
+            pdfImageCache,
+          );
+
+          if (placement) {
+            images.push(placement);
+          }
+        }
+      }
+    }
+
+    return images;
+  }
+
+  private async buildPdfImagePlacement(
+    pdfjs: PdfJsModule,
+    doc: any,
+    image: ResolvedPdfImage,
+    transformMatrix: number[],
+    viewport: any,
+    pdfImageCache: Map<string, string>,
+  ): Promise<PdfImagePlacement | null> {
+    if (
+      image.width < PDF_IMAGE_MIN_SIZE_PX ||
+      image.height < PDF_IMAGE_MIN_SIZE_PX
+    ) {
+      return null;
+    }
+
+    const cacheKey = `${image.name}:${createHash('sha1')
+      .update(image.data)
+      .digest('hex')}`;
+    let imageUrl = pdfImageCache.get(cacheKey);
+
+    if (!imageUrl) {
+      const imageBuffer = this.convertPdfImageToPngBuffer(pdfjs, doc, image);
+      const storedImageUrl = await this.storeExtractedImage(imageBuffer, {
+        mimeType: 'image/png',
+        suggestedExtension: '.png',
+      });
+
+      if (!storedImageUrl) {
+        return null;
+      }
+
+      imageUrl = storedImageUrl;
+      pdfImageCache.set(cacheKey, storedImageUrl);
+    }
+
+    const rect = this.buildPdfImageRect(
+      pdfjs,
+      transformMatrix,
+      viewport.transform,
     );
+
+    return {
+      url: imageUrl,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+    };
+  }
+
+  private buildPdfImageRect(
+    pdfjs: PdfJsModule,
+    transformMatrix: number[],
+    viewportTransform: number[],
+  ): { left: number; right: number; top: number; bottom: number } {
+    const combinedTransform = pdfjs.Util.transform(
+      viewportTransform,
+      transformMatrix,
+    );
+    const points: Array<[number, number]> = [
+      this.transformPdfPoint(combinedTransform, 0, 0),
+      this.transformPdfPoint(combinedTransform, 1, 0),
+      this.transformPdfPoint(combinedTransform, 0, 1),
+      this.transformPdfPoint(combinedTransform, 1, 1),
+    ];
+    const xs = points.map((point) => point[0]);
+    const ys = points.map((point) => point[1]);
+
+    return {
+      left: Math.min(...xs),
+      right: Math.max(...xs),
+      top: Math.min(...ys),
+      bottom: Math.max(...ys),
+    };
+  }
+
+  private transformPdfPoint(
+    matrix: number[],
+    x: number,
+    y: number,
+  ): [number, number] {
+    return [
+      matrix[0] * x + matrix[2] * y + matrix[4],
+      matrix[1] * x + matrix[3] * y + matrix[5],
+    ];
+  }
+
+  private async resolvePdfEmbeddedImage(
+    objectStore: any,
+    name: string,
+  ): Promise<ResolvedPdfImage | null> {
+    if (!objectStore || typeof objectStore.get !== 'function') {
+      return null;
+    }
+
+    if (typeof objectStore.has === 'function' && objectStore.has(name)) {
+      return this.normalizeResolvedPdfImage(name, objectStore.get(name));
+    }
+
+    return new Promise((resolve) => {
+      objectStore.get(name, (image: unknown) => {
+        resolve(this.normalizeResolvedPdfImage(name, image));
+      });
+    });
+  }
+
+  private normalizeResolvedPdfImage(
+    name: string,
+    rawImage: unknown,
+  ): ResolvedPdfImage | null {
+    if (!rawImage || typeof rawImage !== 'object') {
+      return null;
+    }
+
+    const image = rawImage as Record<string, unknown>;
+    const width = typeof image.width === 'number' ? image.width : null;
+    const height = typeof image.height === 'number' ? image.height : null;
+    const kind = typeof image.kind === 'number' ? image.kind : null;
+
+    if (!width || !height || kind === null) {
+      return null;
+    }
+
+    const data = image.data;
+    let normalizedData: Uint8Array | null = null;
+
+    if (data instanceof Uint8Array) {
+      normalizedData = data;
+    } else if (data instanceof Uint8ClampedArray) {
+      normalizedData = new Uint8Array(
+        data.buffer,
+        data.byteOffset,
+        data.byteLength,
+      );
+    } else if (ArrayBuffer.isView(data)) {
+      normalizedData = new Uint8Array(
+        data.buffer,
+        data.byteOffset,
+        data.byteLength,
+      );
+    }
+
+    if (!normalizedData || normalizedData.length === 0) {
+      return null;
+    }
+
+    return {
+      name,
+      width,
+      height,
+      kind,
+      data: normalizedData,
+    };
+  }
+
+  private convertPdfImageToPngBuffer(
+    pdfjs: PdfJsModule,
+    doc: any,
+    image: ResolvedPdfImage,
+  ): Buffer {
+    const canvasFactory = doc.canvasFactory;
+    const canvasAndContext = canvasFactory.create(image.width, image.height);
+    const context = canvasAndContext.context;
+    const imageData = context.createImageData(image.width, image.height);
+
+    if (image.kind === pdfjs.ImageKind.RGBA_32BPP) {
+      imageData.data.set(image.data);
+    } else {
+      this.convertPdfPixelsToRgba({
+        pdfjs,
+        width: image.width,
+        height: image.height,
+        kind: image.kind,
+        src: image.data,
+        dest: new Uint32Array(imageData.data.buffer),
+      });
+    }
+
+    context.putImageData(imageData, 0, 0);
+
+    try {
+      return canvasAndContext.canvas.toBuffer('image/png');
+    } finally {
+      if (typeof canvasFactory.destroy === 'function') {
+        canvasFactory.destroy(canvasAndContext);
+      }
+    }
+  }
+
+  private convertPdfPixelsToRgba({
+    pdfjs,
+    width,
+    height,
+    kind,
+    src,
+    dest,
+  }: {
+    pdfjs: PdfJsModule;
+    width: number;
+    height: number;
+    kind: number;
+    src: Uint8Array;
+    dest: Uint32Array;
+  }): void {
+    if (kind === pdfjs.ImageKind.RGB_24BPP) {
+      for (
+        let sourceIndex = 0, targetIndex = 0;
+        sourceIndex < src.length;
+        sourceIndex += 3, targetIndex += 1
+      ) {
+        const red = src[sourceIndex];
+        const green = src[sourceIndex + 1];
+        const blue = src[sourceIndex + 2];
+
+        dest[targetIndex] = (255 << 24) | (blue << 16) | (green << 8) | red;
+      }
+
+      return;
+    }
+
+    if (kind === pdfjs.ImageKind.GRAYSCALE_1BPP) {
+      let pixelIndex = 0;
+
+      for (const byte of src) {
+        for (let bit = 7; bit >= 0; bit -= 1) {
+          if (pixelIndex >= width * height) {
+            return;
+          }
+
+          const isWhite = ((byte >> bit) & 1) === 1;
+          const gray = isWhite ? 255 : 0;
+
+          dest[pixelIndex] = (255 << 24) | (gray << 16) | (gray << 8) | gray;
+          pixelIndex += 1;
+        }
+      }
+
+      return;
+    }
+
+    throw new Error(`Unsupported PDF image kind: ${kind}`);
+  }
+
+  private mergePdfPageContent(
+    lines: PdfLine[],
+    images: PdfImagePlacement[],
+  ): string {
+    const entries = [
+      ...lines.map((line) => ({
+        top: (line.top + line.bottom) / 2,
+        left: line.left,
+        kind: 'line' as const,
+        text: line.text,
+      })),
+      ...images.map((image) => ({
+        top: (image.top + image.bottom) / 2,
+        left: image.left,
+        kind: 'image' as const,
+        text: this.toImageMarker(image.url),
+      })),
+    ]
+      .filter((entry) => entry.text.trim().length > 0)
+      .sort((leftEntry, rightEntry) => {
+        const verticalDelta = leftEntry.top - rightEntry.top;
+
+        if (Math.abs(verticalDelta) > PDF_SAME_ROW_THRESHOLD) {
+          return verticalDelta;
+        }
+
+        if (Math.abs(leftEntry.left - rightEntry.left) > 1) {
+          return leftEntry.left - rightEntry.left;
+        }
+
+        if (leftEntry.kind === rightEntry.kind) {
+          return 0;
+        }
+
+        return leftEntry.kind === 'line' ? -1 : 1;
+      });
+
+    return entries
+      .map((entry) => entry.text)
+      .join('\n')
+      .trim();
   }
 
   private async extractDocxImageMarkers(
     zip: JSZip,
+    documentPath: string,
+    relationshipsPath: string,
   ): Promise<Map<string, string>> {
-    const imageMarkersByRelationshipId = new Map<string, string>();
-    const relationshipsXml = await zip
-      .file('word/_rels/document.xml.rels')
-      ?.async('string');
+    const imageMarkers = new Map<string, string>();
+    const relationshipsXml = await zip.file(relationshipsPath)?.async('string');
 
     if (!relationshipsXml) {
-      return imageMarkersByRelationshipId;
+      return imageMarkers;
     }
 
     for (const match of relationshipsXml.matchAll(
@@ -242,7 +897,7 @@ export class TextExtractorService {
       }
 
       const targetPath = this.resolveDocxRelationshipTarget(
-        'word/document.xml',
+        documentPath,
         target,
       );
 
@@ -250,8 +905,8 @@ export class TextExtractorService {
         continue;
       }
 
-      const mimeType =
-        DOCX_IMAGE_MIME_BY_EXTENSION[extname(targetPath).toLowerCase()];
+      const extension = extname(targetPath).toLowerCase();
+      const mimeType = DOCX_IMAGE_MIME_BY_EXTENSION[extension];
       const imageFile = zip.file(targetPath);
 
       if (!mimeType || !imageFile) {
@@ -259,40 +914,30 @@ export class TextExtractorService {
       }
 
       const imageBuffer = Buffer.from(await imageFile.async('arraybuffer'));
-      const ext = extname(targetPath).toLowerCase();
-      const isVectorFormat = ext === '.wmf' || ext === '.emf';
+      const storedImageUrl = await this.storeExtractedImage(imageBuffer, {
+        mimeType,
+        suggestedExtension: extension,
+      });
 
-      let dataUrl: string | null;
-
-      if (isVectorFormat) {
-        dataUrl = await this.convertWmfToPngBase64(imageBuffer, ext);
-      } else {
-        dataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
-      }
-
-      if (!dataUrl) {
+      if (!storedImageUrl) {
         continue;
       }
 
-      imageMarkersByRelationshipId.set(relationshipId, `[[image:${dataUrl}]]`);
+      imageMarkers.set(relationshipId, this.toImageMarker(storedImageUrl));
     }
 
-    return imageMarkersByRelationshipId;
+    return imageMarkers;
   }
 
-  private docxXmlToTextWithMath(
+  private docxXmlToText(
     xml: string,
-    imageMarkersByRelationshipId = new Map<string, string>(),
-  ): {
-    text: string;
-    mathCount: number;
-    imageCount: number;
-  } {
+    imageMarkers = new Map<string, string>(),
+  ): StructuredDocxText {
     const tokenPattern =
-      /<m:oMathPara\b[\s\S]*?<\/m:oMathPara>|<m:oMath\b[\s\S]*?<\/m:oMath>|<a:blip\b[^>]*\/?>|<v:imagedata\b[^>]*\/?>|<w:t\b[^>]*>[\s\S]*?<\/w:t>|<w:tab\b[^>]*\/>|<w:br\b[^>]*\/>|<\/w:p>/giu;
+      /<m:oMathPara\b[\s\S]*?<\/m:oMathPara>|<m:oMath\b[\s\S]*?<\/m:oMath>|<a:blip\b[^>]*\/?>|<v:imagedata\b[^>]*\/?>|<w:t\b[^>]*>[\s\S]*?<\/w:t>|<w:tab\b[^>]*\/>|<w:br\b[^>]*\/>|<w:cr\b[^>]*\/>|<\/w:p>|<\/w:tr>|<\/w:tbl>/giu;
     let text = '';
-    let mathCount = 0;
     let imageCount = 0;
+    let mathCount = 0;
 
     for (const match of xml.matchAll(tokenPattern)) {
       const token = match[0];
@@ -313,7 +958,7 @@ export class TextExtractorService {
           this.getXmlAttribute(token, 'r:embed') ??
           this.getXmlAttribute(token, 'r:id');
         const imageMarker = relationshipId
-          ? imageMarkersByRelationshipId.get(relationshipId)
+          ? imageMarkers.get(relationshipId)
           : undefined;
 
         if (imageMarker) {
@@ -340,14 +985,9 @@ export class TextExtractorService {
     }
 
     return {
-      text: text
-        .replace(/\u00a0/g, ' ')
-        .replace(/[ \t]+\n/g, '\n')
-        .replace(/\n[ \t]+/g, '\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim(),
-      mathCount,
+      text: this.normalizeExtractedText(text),
       imageCount,
+      mathCount,
     };
   }
 
@@ -389,349 +1029,166 @@ export class TextExtractorService {
     return this.normalizeFormulaText(text);
   }
 
-  private mergeDocxTextWithMath(
-    textWithImages: string,
-    mathAwareText: string,
-  ): string {
-    if (
-      !/<question>/i.test(mathAwareText) ||
-      !/<variant>/i.test(mathAwareText)
-    ) {
-      return textWithImages;
-    }
-
-    const mathBlocks = this.splitTaggedQuestionBlocks(mathAwareText);
-
-    if (mathBlocks.length === 0) {
-      return textWithImages;
-    }
-
-    const textWithImageBlocks = this.splitTaggedQuestionBlocks(textWithImages);
-
-    return mathBlocks
-      .map((mathBlock, index) =>
-        this.mergeTaggedQuestionBlockWithImages(
-          textWithImageBlocks[index] ?? '',
-          mathBlock,
-        ),
-      )
-      .join('\n\n')
-      .trim();
+  private htmlToTextWithImages(html: string): string {
+    return this.normalizeExtractedText(
+      this.decodeHtmlEntities(
+        html
+          .replace(
+            /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>/giu,
+            (_match, doubleQuotedSrc, singleQuotedSrc, unquotedSrc) =>
+              `\n[[image:${doubleQuotedSrc ?? singleQuotedSrc ?? unquotedSrc ?? ''}]]\n`,
+          )
+          .replace(/<br\s*\/?>/giu, '\n')
+          .replace(/<\/(?:p|div|li|h[1-6]|td|th|tr)>/giu, '\n')
+          .replace(/<[^>]+>/g, ' '),
+      ),
+    );
   }
 
-  private countTaggedVariantsWithContent(value: string): number {
-    return Array.from(
-      value.matchAll(/<variant>\s*([\s\S]*?)(?=<variant>|<question>|$)/giu),
-    ).filter((match) => {
-      const variantBody = match[1] ?? '';
+  private async storeExtractedImage(
+    buffer: Buffer,
+    options: {
+      mimeType: string;
+      suggestedExtension?: string;
+    },
+  ): Promise<string | null> {
+    const normalizedMimeType = options.mimeType.toLowerCase();
+    const normalizedExtension = (
+      options.suggestedExtension ??
+      this.extensionFromMimeType(normalizedMimeType)
+    ).toLowerCase();
+    const shouldConvertToPng =
+      ALWAYS_CONVERT_TO_PNG_EXTENSIONS.has(normalizedExtension) ||
+      !WEB_SAFE_IMAGE_MIME_TYPES.has(normalizedMimeType);
+    let nextBuffer = buffer;
+    let nextExtension = normalizedExtension || '.png';
+    let nextMimeType = normalizedMimeType;
 
-      return (
-        variantBody.replace(IMAGE_MARKER_PATTERN, '').trim().length > 0 ||
-        this.extractImageMarkers(variantBody).length > 0
+    if (shouldConvertToPng) {
+      const convertedBuffer = await this.convertImageToPng(
+        buffer,
+        normalizedMimeType,
+        normalizedExtension,
       );
-    }).length;
-  }
 
-  private mergeTaggedQuestionBlockWithImages(
-    textWithImagesBlock: string,
-    mathBlock: string,
-  ): string {
-    if (!textWithImagesBlock) {
-      return mathBlock;
+      if (!convertedBuffer) {
+        return null;
+      }
+
+      nextBuffer = convertedBuffer;
+      nextExtension = '.png';
+      nextMimeType = 'image/png';
     }
 
-    const questionImageMarkers = this.extractImageMarkers(
-      this.extractTaggedQuestionBody(textWithImagesBlock),
-    );
-    const variantImageMarkers =
-      this.extractTaggedVariantImageMarkers(textWithImagesBlock);
-
-    const blockWithQuestionImages = this.appendImagesToTaggedQuestion(
-      mathBlock,
-      questionImageMarkers,
-    );
-
-    // ✅ FIX: If mammoth produced no variant images (e.g. all images are WMF),
-    // the mathBlock already has correctly-placed images from docxXmlToTextWithMath.
-    // Don't call appendImagesToTaggedVariants with empty markers — it would
-    // overwrite/ignore the images already present in mathBlock.
-    const hasAnyVariantImages = variantImageMarkers.some(
-      (markers) => markers.length > 0,
-    );
-
-    if (!hasAnyVariantImages) {
-      return blockWithQuestionImages;
+    if (!WEB_SAFE_IMAGE_MIME_TYPES.has(nextMimeType)) {
+      return null;
     }
 
-    return this.appendImagesToTaggedVariants(
-      blockWithQuestionImages,
-      variantImageMarkers,
-    );
-  }
+    await mkdir(IMPORTED_IMAGE_STORAGE_PATH, { recursive: true });
 
-  private splitTaggedQuestionBlocks(value: string): string[] {
-    return value
-      .split(/(?=<question>)/i)
-      .map((block) => block.trim())
-      .filter(Boolean);
-  }
+    const fileHash = createHash('sha256').update(nextBuffer).digest('hex');
+    const nestedDir = join(IMPORTED_IMAGE_STORAGE_PATH, fileHash.slice(0, 2));
+    const fileName = `${fileHash}${nextExtension}`;
+    const filePath = join(nestedDir, fileName);
 
-  private extractTaggedQuestionBody(block: string): string {
-    return block.match(/<question>\s*([\s\S]*?)(?=<variant>|$)/i)?.[1] ?? '';
-  }
+    await mkdir(nestedDir, { recursive: true });
 
-  private extractTaggedVariantImageMarkers(block: string): string[][] {
-    return Array.from(
-      block.matchAll(/<variant>\s*([\s\S]*?)(?=<variant>|<question>|$)/giu),
-    ).map((match) => this.extractImageMarkers(match[1] ?? ''));
-  }
-
-  private appendImagesToTaggedQuestion(
-    block: string,
-    imageMarkers: string[],
-  ): string {
-    if (imageMarkers.length === 0) {
-      return block;
+    try {
+      await access(filePath);
+    } catch {
+      await writeFile(filePath, nextBuffer);
     }
 
-    const firstVariantIndex = block.search(/<variant>/i);
-
-    if (firstVariantIndex === -1) {
-      return this.appendImageMarkers(block, imageMarkers);
-    }
-
-    const questionPart = block.slice(0, firstVariantIndex);
-    const variantsPart = block.slice(firstVariantIndex);
-
-    return `${this.appendImageMarkers(
-      questionPart,
-      imageMarkers,
-    )}\n${variantsPart.trimStart()}`;
+    return `${IMPORTED_IMAGE_ROUTE_PREFIX}/${fileHash.slice(0, 2)}/${fileName}`;
   }
 
-  private appendImagesToTaggedVariants(
-    block: string,
-    variantImageMarkers: string[][],
-  ): string {
-    if (variantImageMarkers.every((markers) => markers.length === 0)) {
-      return block;
+  private async convertImageToPng(
+    buffer: Buffer,
+    mimeType: string,
+    extension: string,
+  ): Promise<Buffer | null> {
+    if (extension === '.wmf' || extension === '.emf') {
+      return this.convertVectorImageToPng(buffer, extension);
     }
 
-    const variantPattern =
-      /<variant>\s*([\s\S]*?)(?=<variant>|<question>|$)/giu;
-    let output = '';
-    let lastIndex = 0;
-
-    for (const match of block.matchAll(variantPattern)) {
-      const matchIndex = match.index ?? 0;
-      const variantIndex = output.match(/<variant>/gi)?.length ?? 0;
-
-      output += block.slice(lastIndex, matchIndex);
-      output += this.appendImageMarkers(
-        match[0],
-        variantImageMarkers[variantIndex] ?? [],
-      );
-      lastIndex = matchIndex + match[0].length;
-    }
-
-    output += block.slice(lastIndex);
-
-    return output;
-  }
-
-  private injectPdfImagesIntoTaggedText(
-    textPages: PdfTextPage[],
-    imagePages: PdfImagePage[],
-    fallbackText: string,
-  ): string {
-    const imagesByPage = new Map(
-      imagePages.map((page) => [
-        page.pageNumber,
-        page.images
-          .map((image) => image.dataUrl)
-          .filter((imageUrl): imageUrl is string =>
-            /^data:image\/(?:png|jpe?g|gif|webp|bmp|svg\+xml);base64,/i.test(
-              imageUrl ?? '',
-            ),
-          ),
-      ]),
-    );
-
-    if (textPages.length === 0) {
-      return this.injectImagesIntoTaggedText(
-        fallbackText,
-        Array.from(imagesByPage.values()).flat(),
+    try {
+      return await sharp(buffer).png().toBuffer();
+    } catch (error) {
+      this.logger.warn(
+        `Sharp could not convert ${mimeType} to PNG: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
       );
     }
 
-    return textPages
-      .map((page) =>
-        this.injectImagesIntoTaggedText(
-          page.text,
-          imagesByPage.get(page.num) ?? [],
-        ),
-      )
-      .join('\n\n')
-      .trim();
+    return this.convertVectorImageToPng(buffer, extension);
   }
 
-  private injectImagesIntoTaggedText(
-    text: string,
-    imageUrls: string[],
-  ): string {
-    if (imageUrls.length === 0 || !/<question>/i.test(text)) {
-      return text;
-    }
+  private async convertVectorImageToPng(
+    buffer: Buffer,
+    extension: string,
+  ): Promise<Buffer | null> {
+    const tempDir = await mkdtemp(join(tmpdir(), 'image-convert-'));
+    const inputPath = join(tempDir, `source${extension || '.img'}`);
+    const outputPath = join(tempDir, 'converted.png');
 
-    const blocks = Array.from(
-      text.matchAll(/<question>[\s\S]*?(?=<question>|$)/giu),
-    );
+    try {
+      await writeFile(inputPath, buffer);
 
-    if (blocks.length === 0) {
-      return text;
-    }
-
-    let imageIndex = 0;
-    let questionImageBudget = Math.max(
-      0,
-      imageUrls.length -
-        blocks.reduce(
-          (count, block) => count + this.countEmptyTaggedVariantSlots(block[0]),
-          0,
-        ),
-    );
-    let output = '';
-    let lastIndex = 0;
-
-    for (const blockMatch of blocks) {
-      const block = blockMatch[0];
-      const blockIndex = blockMatch.index ?? 0;
-      const result = this.injectImagesIntoTaggedBlock(
-        block,
-        imageUrls.slice(imageIndex),
-        questionImageBudget,
+      const converted = await this.tryRunCommand(
+        'magick',
+        [inputPath, outputPath],
+        EXTERNAL_IMAGE_CONVERSION_TIMEOUT_MS,
       );
 
-      output += text.slice(lastIndex, blockIndex);
-      output += result.block;
-      imageIndex += result.usedCount;
-      questionImageBudget -= result.usedQuestionImageCount;
-      lastIndex = blockIndex + block.length;
+      if (!converted || !(await this.fileExists(outputPath))) {
+        return null;
+      }
+
+      return readFile(outputPath);
+    } finally {
+      await Promise.allSettled([unlink(inputPath), unlink(outputPath)]);
+      await rm(tempDir, { recursive: true, force: true });
     }
-
-    output += text.slice(lastIndex);
-
-    return output.trim();
   }
 
-  private injectImagesIntoTaggedBlock(
-    block: string,
-    imageUrls: string[],
-    questionImageBudget: number,
-  ): { block: string; usedCount: number; usedQuestionImageCount: number } {
-    let nextBlock = block;
-    let usedCount = 0;
-    let usedQuestionImageCount = 0;
-    const questionBody = this.extractTaggedQuestionBody(block);
-
-    if (
-      questionImageBudget > 0 &&
-      imageUrls.length > 0 &&
-      questionBody.trim().length > 0 &&
-      this.extractImageMarkers(questionBody).length === 0
-    ) {
-      nextBlock = this.appendImagesToTaggedQuestion(nextBlock, [
-        this.toImageMarker(imageUrls[usedCount]),
-      ]);
-      usedCount += 1;
-      usedQuestionImageCount += 1;
+  private async tryRunCommand(
+    command: string,
+    args: string[],
+    timeoutMs: number,
+  ): Promise<boolean> {
+    try {
+      await execFileAsync(command, args, {
+        timeout: timeoutMs,
+        windowsHide: true,
+      });
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `Command "${command}" failed: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return false;
     }
-
-    const variantImageMarkers = this.extractTaggedVariantBodies(block).map(
-      (variantBody) => {
-        if (
-          usedCount >= imageUrls.length ||
-          !this.isEmptyTaggedBodyWithoutImages(variantBody)
-        ) {
-          return [];
-        }
-
-        const imageMarker = this.toImageMarker(imageUrls[usedCount]);
-        usedCount += 1;
-
-        return [imageMarker];
-      },
-    );
-
-    nextBlock = this.appendImagesToTaggedVariants(
-      nextBlock,
-      variantImageMarkers,
-    );
-
-    return {
-      block: nextBlock,
-      usedCount,
-      usedQuestionImageCount,
-    };
   }
 
-  private countEmptyTaggedVariantSlots(block: string): number {
-    return this.extractTaggedVariantBodies(block).filter((variantBody) =>
-      this.isEmptyTaggedBodyWithoutImages(variantBody),
-    ).length;
-  }
-
-  private extractTaggedVariantBodies(block: string): string[] {
-    return Array.from(
-      block.matchAll(/<variant>\s*([\s\S]*?)(?=<variant>|<question>|$)/giu),
-    ).map((match) => match[1] ?? '');
-  }
-
-  private isEmptyTaggedBodyWithoutImages(value: string): boolean {
-    return (
-      this.extractImageMarkers(value).length === 0 &&
-      value.replace(IMAGE_MARKER_PATTERN, '').trim().length === 0
-    );
-  }
-
-  private appendImageMarkers(value: string, imageMarkers: string[]): string {
-    const missingImageMarkers = imageMarkers.filter(
-      (imageMarker) => !value.includes(imageMarker),
-    );
-
-    if (missingImageMarkers.length === 0) {
-      return value.trimEnd();
+  private async fileExists(path: string): Promise<boolean> {
+    try {
+      await access(path);
+      return true;
+    } catch {
+      return false;
     }
-
-    return `${value.trimEnd()}\n${missingImageMarkers.join('\n')}`;
   }
 
-  private toImageMarker(imageUrl: string): string {
-    return `[[image:${imageUrl}]]`;
-  }
-
-  private extractImageMarkers(value: string): string[] {
-    return Array.from(value.matchAll(IMAGE_MARKER_PATTERN)).map(
-      (match) => match[0],
-    );
-  }
-
-  private normalizeFormulaText(value: string): string {
-    return value
-      .replace(/\s+/g, ' ')
-      .replace(/\s+([,.;:)\]])/g, '$1')
-      .replace(/\(\s+/g, '(')
-      .replace(/\[\s+/g, '[')
-      .trim();
-  }
-
-  private getXmlAttribute(attributes: string, name: string): string | null {
-    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = attributes.match(
-      new RegExp(`\\b${escapedName}\\s*=\\s*(?:"([^"]+)"|'([^']+)')`, 'iu'),
+  private extensionFromMimeType(mimeType: string): string {
+    const normalizedMimeType = mimeType.toLowerCase();
+    const match = Object.entries(DOCX_IMAGE_MIME_BY_EXTENSION).find(
+      ([, value]) => value === normalizedMimeType,
     );
 
-    return match ? this.decodeXmlEntities(match[1] ?? match[2] ?? '') : null;
+    return match?.[0] ?? '.png';
   }
 
   private resolveDocxRelationshipTarget(
@@ -763,6 +1220,28 @@ export class TextExtractorService {
     return pathParts.join('/');
   }
 
+  private getXmlAttribute(attributes: string, name: string): string | null {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = attributes.match(
+      new RegExp(`\\b${escapedName}\\s*=\\s*(?:"([^"]+)"|'([^']+)')`, 'iu'),
+    );
+
+    return match ? this.decodeXmlEntities(match[1] ?? match[2] ?? '') : null;
+  }
+
+  private toImageMarker(url: string): string {
+    return `[[image:${url}]]`;
+  }
+
+  private normalizeFormulaText(value: string): string {
+    return value
+      .replace(/\s+/g, ' ')
+      .replace(/\s+([,.;:)\]])/g, '$1')
+      .replace(/\(\s+/g, '(')
+      .replace(/\[\s+/g, '[')
+      .trim();
+  }
+
   private decodeHtmlEntities(value: string): string {
     return value
       .replace(/&lt;/gi, '<')
@@ -783,34 +1262,15 @@ export class TextExtractorService {
       );
   }
 
-  validateFile(
-    file: Express.Multer.File | undefined,
-  ): asserts file is Express.Multer.File {
-    if (!file) {
-      throw new BadRequestException('File is required');
-    }
-
-    if (!file.buffer || file.buffer.length === 0) {
-      throw new BadRequestException('File is empty');
-    }
-
-    const maxUploadSizeBytes = this.maxUploadSizeBytes();
-
-    if (file.size > maxUploadSizeBytes) {
-      throw new BadRequestException(
-        `File is too large. Max size is ${maxUploadSizeBytes} bytes`,
-      );
-    }
-
-    const extension = this.getExtension(file.originalname);
-
-    if (!SUPPORTED_FILE_EXTENSIONS.includes(extension as never)) {
-      throw new BadRequestException('Unsupported file extension');
-    }
-
-    if (!SUPPORTED_MIME_TYPES.includes(file.mimetype as never)) {
-      throw new BadRequestException('Unsupported file mime type');
-    }
+  private normalizeExtractedText(value: string): string {
+    return value
+      .replace(/^\uFEFF/, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   }
 
   private getExtension(originalName: string): string {
@@ -823,5 +1283,42 @@ export class TextExtractorService {
       'MAX_UPLOAD_FILE_SIZE_BYTES',
       MAX_UPLOAD_FILE_SIZE_BYTES,
     );
+  }
+
+  private pdfImageExtractionTimeoutMs(): number {
+    return getPositiveIntConfig(
+      this.configService,
+      'PDF_IMAGE_EXTRACTION_TIMEOUT_MS',
+      DEFAULT_PDF_IMAGE_EXTRACTION_TIMEOUT_MS,
+    );
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    fallbackValue: T,
+  ): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((resolve) => {
+          timeoutId = setTimeout(() => resolve(fallbackValue), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  private getPdfJs(): Promise<PdfJsModule> {
+    if (!this.pdfJsPromise) {
+      this.pdfJsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
+    }
+
+    return this.pdfJsPromise;
   }
 }

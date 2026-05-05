@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -36,6 +40,136 @@ export class TestsService {
     }
 
     return test;
+  }
+
+  async copyPublicTest(userId: string, sourceTestId: string) {
+    const sourceTest = await this.getPublicSourceTest(sourceTestId);
+
+    const copiedTest = await this.prisma.test.create({
+      data: this.buildCopiedTestData(
+        userId,
+        sourceTest.title.trim(),
+        sourceTest.type,
+        sourceTest.questions,
+      ),
+      select: {
+        id: true,
+        title: true,
+      },
+    });
+
+    return {
+      testId: copiedTest.id,
+      title: copiedTest.title,
+      questionsCount: sourceTest.questions.length,
+    };
+  }
+
+  async splitPublicTest(
+    userId: string,
+    sourceTestId: string,
+    questionsPerPart: number,
+  ) {
+    const sourceTest = await this.getPublicSourceTest(sourceTestId);
+
+    if (sourceTest.questions.length < 2) {
+      throw new BadRequestException('Test is too small to split');
+    }
+
+    if (questionsPerPart >= sourceTest.questions.length) {
+      throw new BadRequestException(
+        'Questions per part must be smaller than total questions',
+      );
+    }
+
+    const questionGroups = this.chunkItems(
+      sourceTest.questions,
+      questionsPerPart,
+    );
+    const createdTests = await this.prisma.$transaction(
+      questionGroups.map((questions, index) =>
+        this.prisma.test.create({
+          data: this.buildCopiedTestData(
+            userId,
+            `${sourceTest.title.trim()} (${index + 1}/${questionGroups.length})`,
+            sourceTest.type,
+            questions,
+          ),
+          select: {
+            id: true,
+            title: true,
+          },
+        }),
+      ),
+    );
+
+    return {
+      totalParts: createdTests.length,
+      createdTests: createdTests.map((test, index) => ({
+        testId: test.id,
+        title: test.title,
+        questionsCount: questionGroups[index].length,
+      })),
+    };
+  }
+
+  private async getPublicSourceTest(sourceTestId: string) {
+    const sourceTest = await this.prisma.test.findUnique({
+      where: { id: sourceTestId },
+      include: this.detailInclude(),
+    });
+
+    if (!sourceTest) {
+      throw new NotFoundException('Test not found');
+    }
+
+    return sourceTest;
+  }
+
+  private buildCopiedTestData(
+    userId: string,
+    title: string,
+    type: 'SINGLE_CHOICE',
+    questions: Array<{
+      text: string;
+      imageUrls: string[];
+      variants: Array<{
+        text: string;
+        imageUrls: string[];
+        isCorrect: boolean;
+      }>;
+    }>,
+  ) {
+    return {
+      userId,
+      title,
+      type,
+      questions: {
+        create: questions.map((question, questionIndex) => ({
+          text: question.text,
+          imageUrls: question.imageUrls,
+          order: questionIndex + 1,
+          variants: {
+            create: question.variants.map((variant, variantIndex) => ({
+              text: variant.text,
+              imageUrls: variant.imageUrls,
+              isCorrect: variant.isCorrect,
+              order: variantIndex + 1,
+            })),
+          },
+        })),
+      },
+    };
+  }
+
+  private chunkItems<T>(items: readonly T[], chunkSize: number): T[][] {
+    const chunks: T[][] = [];
+
+    for (let index = 0; index < items.length; index += chunkSize) {
+      chunks.push(items.slice(index, index + chunkSize));
+    }
+
+    return chunks;
   }
 
   detailInclude() {
