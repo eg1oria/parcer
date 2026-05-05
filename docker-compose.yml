@@ -26,6 +26,8 @@ services:
     build:
       context: ./backend
       provenance: false
+    volumes:
+      - imported_test_images:/app/.tmp/imported-tests
     expose:
       - '5000'
     ports:
@@ -87,3 +89,4 @@ services:
 
 volumes:
   postgres_data:
+  imported_test_images:
