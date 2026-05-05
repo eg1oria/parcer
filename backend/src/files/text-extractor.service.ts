@@ -118,28 +118,11 @@ type StructuredDocxText = {
 };
 
 type PdfJsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
-type PdfParseResult = {
-  text: string;
-};
-
-type PdfParseInstance = {
-  getText: () => Promise<PdfParseResult>;
-  destroy: () => Promise<void>;
-};
-
-type PdfParseConstructor = new (options: {
-  data: Uint8Array;
-}) => PdfParseInstance;
-
-type PdfParseModule = {
-  PDFParse: PdfParseConstructor;
-};
 
 @Injectable()
 export class TextExtractorService {
   private readonly logger = new Logger(TextExtractorService.name);
   private pdfJsPromise: Promise<PdfJsModule> | null = null;
-  private pdfParsePromise: Promise<PdfParseModule> | null = null;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -301,29 +284,19 @@ export class TextExtractorService {
   }
 
   private async extractPdfText(buffer: Buffer): Promise<string> {
-    if (!this.isRichPdfExtractionEnabled()) {
-      return this.extractPlainPdfTextSafely(buffer);
-    }
+    const extractMethod = this.isRichPdfExtractionEnabled()
+      ? this.extractRichPdfText(buffer)
+      : this.extractTextOnlyPdfText(buffer);
 
     try {
-      return await this.extractRichPdfText(buffer);
+      return await extractMethod;
     } catch (error) {
-      this.logger.warn(
-        `Rich PDF extraction failed, falling back to plain text extraction: ${
-          error instanceof Error ? error.message : 'unknown error'
-        }`,
-      );
-    }
+      const modeLabel = this.isRichPdfExtractionEnabled()
+        ? 'rich'
+        : 'text-only';
 
-    return this.extractPlainPdfTextSafely(buffer);
-  }
-
-  private async extractPlainPdfTextSafely(buffer: Buffer): Promise<string> {
-    try {
-      return await this.extractPlainPdfText(buffer);
-    } catch (error) {
       this.logger.warn(
-        `Plain PDF extraction failed: ${
+        `${modeLabel} PDF extraction failed: ${
           error instanceof Error ? error.message : 'unknown error'
         }`,
       );
@@ -372,18 +345,36 @@ export class TextExtractorService {
     return pages.filter(Boolean).join('\n\n');
   }
 
-  private async extractPlainPdfText(buffer: Buffer): Promise<string> {
-    const { PDFParse } = await this.getPdfParse();
-    const parser = new PDFParse({
+  private async extractTextOnlyPdfText(buffer: Buffer): Promise<string> {
+    const pdfjs = await this.getPdfJs();
+    const loadingTask = pdfjs.getDocument({
       data: new Uint8Array(buffer),
     });
+    const doc = await loadingTask.promise;
+    const pages: string[] = [];
 
     try {
-      const result = await parser.getText();
-      return result.text;
+      for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+        const page = await doc.getPage(pageNumber);
+
+        try {
+          const textItems = await this.extractPdfPageTextItems(page);
+          const lines = this.groupPdfTextItemsIntoLines(textItems);
+          const pageText = lines.map((line) => line.text).join('\n').trim();
+
+          if (pageText) {
+            pages.push(pageText);
+          }
+        } finally {
+          page.cleanup();
+        }
+      }
     } finally {
-      await parser.destroy();
+      await doc.destroy();
+      await loadingTask.destroy();
     }
+
+    return pages.join('\n\n');
   }
 
   private async extractPdfPageImagesSafely(
@@ -1419,16 +1410,6 @@ export class TextExtractorService {
     }
 
     return this.pdfJsPromise;
-  }
-
-  private getPdfParse(): Promise<PdfParseModule> {
-    if (!this.pdfParsePromise) {
-      this.pdfParsePromise = import('pdf-parse').then((module) => ({
-        PDFParse: module.PDFParse as PdfParseConstructor,
-      }));
-    }
-
-    return this.pdfParsePromise;
   }
 
   private isRichPdfExtractionEnabled(): boolean {
