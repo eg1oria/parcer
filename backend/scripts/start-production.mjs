@@ -10,13 +10,17 @@ function runCommand(command, args) {
     });
 
     child.on('error', reject);
-    child.on('exit', (code) => {
+    child.on('exit', (code, signal) => {
       if (code === 0) {
         resolve();
         return;
       }
 
-      reject(new Error(`${command} ${args.join(' ')} exited with code ${code}`));
+      reject(
+        new Error(
+          `${command} ${args.join(' ')} exited with code ${code} and signal ${signal}`,
+        ),
+      );
     });
   });
 }

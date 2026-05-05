@@ -284,6 +284,16 @@ export class TextExtractorService {
   }
 
   private async extractPdfText(buffer: Buffer): Promise<string> {
+    try {
+      return await this.extractPdfTextWithPoppler(buffer);
+    } catch (error) {
+      this.logger.warn(
+        `pdftotext extraction failed, falling back to JS extraction: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+
     const extractMethod = this.isRichPdfExtractionEnabled()
       ? this.extractRichPdfText(buffer)
       : this.extractTextOnlyPdfText(buffer);
@@ -301,6 +311,28 @@ export class TextExtractorService {
         }`,
       );
       throw new BadRequestException('Could not extract text from PDF');
+    }
+  }
+
+  private async extractPdfTextWithPoppler(buffer: Buffer): Promise<string> {
+    const tempDir = await mkdtemp(join(tmpdir(), 'pdf-import-'));
+    const inputPath = join(tempDir, 'source.pdf');
+
+    try {
+      await writeFile(inputPath, buffer);
+      const { stdout } = await execFileAsync(
+        'pdftotext',
+        ['-enc', 'UTF-8', '-layout', '-nopgbrk', inputPath, '-'],
+        {
+          timeout: this.pdfTextExtractionTimeoutMs(),
+          windowsHide: true,
+          maxBuffer: 20 * 1024 * 1024,
+        },
+      );
+
+      return stdout;
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -1380,6 +1412,14 @@ export class TextExtractorService {
       this.configService,
       'PDF_IMAGE_EXTRACTION_TIMEOUT_MS',
       DEFAULT_PDF_IMAGE_EXTRACTION_TIMEOUT_MS,
+    );
+  }
+
+  private pdfTextExtractionTimeoutMs(): number {
+    return getPositiveIntConfig(
+      this.configService,
+      'PDF_TEXT_EXTRACTION_TIMEOUT_MS',
+      30_000,
     );
   }
 

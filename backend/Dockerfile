@@ -19,6 +19,7 @@ RUN npm run build
 FROM node:22-alpine
 
 WORKDIR /app
+RUN apk add --no-cache poppler-utils
 COPY package*.json ./
 RUN npm ci
 ARG DATABASE_URL=postgresql://testprep:testprep@localhost:5432/testprep?schema=public
