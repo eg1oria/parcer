@@ -118,7 +118,22 @@ type StructuredDocxText = {
 };
 
 type PdfJsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
-type PdfParseModule = typeof import('pdf-parse');
+type PdfParseResult = {
+  text: string;
+};
+
+type PdfParseInstance = {
+  getText: () => Promise<PdfParseResult>;
+  destroy: () => Promise<void>;
+};
+
+type PdfParseConstructor = new (options: {
+  data: Uint8Array;
+}) => PdfParseInstance;
+
+type PdfParseModule = {
+  PDFParse: PdfParseConstructor;
+};
 
 @Injectable()
 export class TextExtractorService {
@@ -1400,7 +1415,9 @@ export class TextExtractorService {
 
   private getPdfParse(): Promise<PdfParseModule> {
     if (!this.pdfParsePromise) {
-      this.pdfParsePromise = import('pdf-parse');
+      this.pdfParsePromise = import('pdf-parse').then((module) => ({
+        PDFParse: module.PDFParse as PdfParseConstructor,
+      }));
     }
 
     return this.pdfParsePromise;
