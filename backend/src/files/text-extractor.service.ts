@@ -17,6 +17,7 @@ import { extname, join } from 'node:path';
 import { promisify } from 'node:util';
 import JSZip from 'jszip';
 import * as mammoth from 'mammoth';
+import { PDFParse } from 'pdf-parse';
 import sharp from 'sharp';
 import WordExtractor from 'word-extractor';
 import { getPositiveIntConfig } from '../common/config/env-number';
@@ -284,6 +285,29 @@ export class TextExtractorService {
   }
 
   private async extractPdfText(buffer: Buffer): Promise<string> {
+    try {
+      return await this.extractRichPdfText(buffer);
+    } catch (error) {
+      this.logger.warn(
+        `Rich PDF extraction failed, falling back to plain text extraction: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
+
+    try {
+      return await this.extractPlainPdfText(buffer);
+    } catch (error) {
+      this.logger.warn(
+        `Plain PDF extraction failed: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      throw new BadRequestException('Could not extract text from PDF');
+    }
+  }
+
+  private async extractRichPdfText(buffer: Buffer): Promise<string> {
     const pdfjs = await this.getPdfJs();
     const loadingTask = pdfjs.getDocument({
       data: new Uint8Array(buffer),
@@ -303,15 +327,13 @@ export class TextExtractorService {
         try {
           const textItems = await this.extractPdfPageTextItems(page);
           const lines = this.groupPdfTextItemsIntoLines(textItems);
-          const remainingImageBudgetMs = imageExtractionDeadline - Date.now();
-          const images =
-            remainingImageBudgetMs > 0
-              ? await this.withTimeout(
-                  this.extractPdfPageImages(pdfjs, doc, page, pdfImageCache),
-                  remainingImageBudgetMs,
-                  [],
-                )
-              : [];
+          const images = await this.extractPdfPageImagesSafely(
+            pdfjs,
+            doc,
+            page,
+            pdfImageCache,
+            imageExtractionDeadline,
+          );
 
           pages.push(this.mergePdfPageContent(lines, images));
         } finally {
@@ -324,6 +346,48 @@ export class TextExtractorService {
     }
 
     return pages.filter(Boolean).join('\n\n');
+  }
+
+  private async extractPlainPdfText(buffer: Buffer): Promise<string> {
+    const parser = new PDFParse({
+      data: new Uint8Array(buffer),
+    });
+
+    try {
+      const result = await parser.getText();
+      return result.text;
+    } finally {
+      await parser.destroy();
+    }
+  }
+
+  private async extractPdfPageImagesSafely(
+    pdfjs: PdfJsModule,
+    doc: any,
+    page: any,
+    pdfImageCache: Map<string, string>,
+    imageExtractionDeadline: number,
+  ): Promise<PdfImagePlacement[]> {
+    const remainingImageBudgetMs = imageExtractionDeadline - Date.now();
+
+    if (remainingImageBudgetMs <= 0 || !this.canRenderPdfImages(doc)) {
+      return [];
+    }
+
+    try {
+      return await this.withTimeout(
+        this.extractPdfPageImages(pdfjs, doc, page, pdfImageCache),
+        remainingImageBudgetMs,
+        [],
+      );
+    } catch (error) {
+      this.logger.warn(
+        `PDF image extraction failed for page ${page.pageNumber ?? 'unknown'}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return [];
+    }
   }
 
   private async extractPdfPageTextItems(page: any): Promise<PdfTextItem[]> {
@@ -671,6 +735,16 @@ export class TextExtractorService {
       matrix[0] * x + matrix[2] * y + matrix[4],
       matrix[1] * x + matrix[3] * y + matrix[5],
     ];
+  }
+
+  private canRenderPdfImages(doc: any): boolean {
+    const canvasFactory = doc?.canvasFactory;
+
+    return Boolean(
+      canvasFactory &&
+        typeof canvasFactory.create === 'function' &&
+        typeof canvasFactory.destroy === 'function',
+    );
   }
 
   private async resolvePdfEmbeddedImage(
