@@ -424,7 +424,7 @@ export class TextExtractorService {
   ): Promise<PdfImagePlacement[]> {
     const remainingImageBudgetMs = imageExtractionDeadline - Date.now();
 
-    if (remainingImageBudgetMs <= 0 || !this.canRenderPdfImages(doc)) {
+    if (remainingImageBudgetMs <= 0) {
       return [];
     }
 
@@ -604,7 +604,6 @@ export class TextExtractorService {
 
         const placement = await this.buildPdfImagePlacement(
           pdfjs,
-          doc,
           image,
           transformMatrix,
           viewport,
@@ -635,7 +634,6 @@ export class TextExtractorService {
 
         const placement = await this.buildPdfImagePlacement(
           pdfjs,
-          doc,
           image,
           transformMatrix,
           viewport,
@@ -687,7 +685,6 @@ export class TextExtractorService {
           ]);
           const placement = await this.buildPdfImagePlacement(
             pdfjs,
-            doc,
             image,
             repeatTransform,
             viewport,
@@ -706,7 +703,6 @@ export class TextExtractorService {
 
   private async buildPdfImagePlacement(
     pdfjs: PdfJsModule,
-    doc: any,
     image: ResolvedPdfImage,
     transformMatrix: number[],
     viewport: any,
@@ -725,7 +721,7 @@ export class TextExtractorService {
     let imageUrl = pdfImageCache.get(cacheKey);
 
     if (!imageUrl) {
-      const imageBuffer = this.convertPdfImageToPngBuffer(pdfjs, doc, image);
+      const imageBuffer = await this.convertPdfImageToPngBuffer(pdfjs, image);
       const storedImageUrl = await this.storeExtractedImage(imageBuffer, {
         mimeType: 'image/png',
         suggestedExtension: '.png',
@@ -789,16 +785,6 @@ export class TextExtractorService {
       matrix[0] * x + matrix[2] * y + matrix[4],
       matrix[1] * x + matrix[3] * y + matrix[5],
     ];
-  }
-
-  private canRenderPdfImages(doc: any): boolean {
-    const canvasFactory = doc?.canvasFactory;
-
-    return Boolean(
-      canvasFactory &&
-        typeof canvasFactory.create === 'function' &&
-        typeof canvasFactory.destroy === 'function',
-    );
   }
 
   private async resolvePdfEmbeddedImage(
@@ -885,38 +871,32 @@ export class TextExtractorService {
     };
   }
 
-  private convertPdfImageToPngBuffer(
+  private async convertPdfImageToPngBuffer(
     pdfjs: PdfJsModule,
-    doc: any,
     image: ResolvedPdfImage,
-  ): Buffer {
-    const canvasFactory = doc.canvasFactory;
-    const canvasAndContext = canvasFactory.create(image.width, image.height);
-    const context = canvasAndContext.context;
-    const imageData = context.createImageData(image.width, image.height);
+  ): Promise<Buffer> {
+    const rgbaBuffer =
+      image.kind === pdfjs.ImageKind.RGBA_32BPP
+        ? Buffer.from(image.data)
+        : Buffer.from(
+            this.convertPdfPixelsToRgba({
+              pdfjs,
+              width: image.width,
+              height: image.height,
+              kind: image.kind,
+              src: image.data,
+            }),
+          );
 
-    if (image.kind === pdfjs.ImageKind.RGBA_32BPP) {
-      imageData.data.set(image.data);
-    } else {
-      this.convertPdfPixelsToRgba({
-        pdfjs,
+    return sharp(rgbaBuffer, {
+      raw: {
         width: image.width,
         height: image.height,
-        kind: image.kind,
-        src: image.data,
-        dest: new Uint32Array(imageData.data.buffer),
-      });
-    }
-
-    context.putImageData(imageData, 0, 0);
-
-    try {
-      return canvasAndContext.canvas.toBuffer('image/png');
-    } finally {
-      if (typeof canvasFactory.destroy === 'function') {
-        canvasFactory.destroy(canvasAndContext);
-      }
-    }
+        channels: 4,
+      },
+    })
+      .png()
+      .toBuffer();
   }
 
   private convertPdfPixelsToRgba({
@@ -925,29 +905,28 @@ export class TextExtractorService {
     height,
     kind,
     src,
-    dest,
   }: {
     pdfjs: PdfJsModule;
     width: number;
     height: number;
     kind: number;
     src: Uint8Array;
-    dest: Uint32Array;
-  }): void {
+  }): Uint8Array {
+    const dest = new Uint8Array(width * height * 4);
+
     if (kind === pdfjs.ImageKind.RGB_24BPP) {
       for (
         let sourceIndex = 0, targetIndex = 0;
         sourceIndex < src.length;
-        sourceIndex += 3, targetIndex += 1
+        sourceIndex += 3, targetIndex += 4
       ) {
-        const red = src[sourceIndex];
-        const green = src[sourceIndex + 1];
-        const blue = src[sourceIndex + 2];
-
-        dest[targetIndex] = (255 << 24) | (blue << 16) | (green << 8) | red;
+        dest[targetIndex] = src[sourceIndex];
+        dest[targetIndex + 1] = src[sourceIndex + 1];
+        dest[targetIndex + 2] = src[sourceIndex + 2];
+        dest[targetIndex + 3] = 255;
       }
 
-      return;
+      return dest;
     }
 
     if (kind === pdfjs.ImageKind.GRAYSCALE_1BPP) {
@@ -956,18 +935,22 @@ export class TextExtractorService {
       for (const byte of src) {
         for (let bit = 7; bit >= 0; bit -= 1) {
           if (pixelIndex >= width * height) {
-            return;
+            return dest;
           }
 
           const isWhite = ((byte >> bit) & 1) === 1;
           const gray = isWhite ? 255 : 0;
+          const targetIndex = pixelIndex * 4;
 
-          dest[pixelIndex] = (255 << 24) | (gray << 16) | (gray << 8) | gray;
+          dest[targetIndex] = gray;
+          dest[targetIndex + 1] = gray;
+          dest[targetIndex + 2] = gray;
+          dest[targetIndex + 3] = 255;
           pixelIndex += 1;
         }
       }
 
-      return;
+      return dest;
     }
 
     throw new Error(`Unsupported PDF image kind: ${kind}`);
@@ -1468,10 +1451,244 @@ export class TextExtractorService {
 
   private getPdfJs(): Promise<PdfJsModule> {
     if (!this.pdfJsPromise) {
-      this.pdfJsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
+      this.pdfJsPromise = this.importPdfJsWithoutCanvas();
     }
 
     return this.pdfJsPromise;
+  }
+
+  private async importPdfJsWithoutCanvas(): Promise<PdfJsModule> {
+    this.ensurePdfJsDomPolyfills();
+
+    const originalGetBuiltinModule = process.getBuiltinModule?.bind(process);
+    const moduleBuiltin = originalGetBuiltinModule?.('module') as
+      | {
+          createRequire?: (filename: string | URL) => NodeRequire;
+        }
+      | undefined;
+    const originalCreateRequire = moduleBuiltin?.createRequire?.bind(
+      moduleBuiltin,
+    );
+
+    if (moduleBuiltin && originalCreateRequire) {
+      moduleBuiltin.createRequire = ((filename: string | URL) => {
+        const require = originalCreateRequire(filename);
+        const wrappedRequire = ((id: string) => {
+          if (id === '@napi-rs/canvas') {
+            throw new Error(
+              'Skipping @napi-rs/canvas to avoid native canvas loading',
+            );
+          }
+
+          return require(id);
+        }) as NodeRequire;
+
+        wrappedRequire.resolve = require.resolve.bind(require);
+        wrappedRequire.cache = require.cache;
+        wrappedRequire.extensions = require.extensions;
+        wrappedRequire.main = require.main;
+
+        return wrappedRequire;
+      }) as (filename: string | URL) => NodeRequire;
+    }
+
+    try {
+      return await import('pdfjs-dist/legacy/build/pdf.mjs');
+    } finally {
+      if (moduleBuiltin && originalCreateRequire) {
+        moduleBuiltin.createRequire = originalCreateRequire;
+      }
+    }
+  }
+
+  private ensurePdfJsDomPolyfills(): void {
+    const globalScope = globalThis as typeof globalThis & {
+      DOMMatrix?: typeof DOMMatrix;
+      ImageData?: typeof ImageData;
+      Path2D?: typeof Path2D;
+    };
+
+    if (!globalScope.DOMMatrix) {
+      class SimpleDOMMatrix {
+        a = 1;
+        b = 0;
+        c = 0;
+        d = 1;
+        e = 0;
+        f = 0;
+
+        constructor(init?: Iterable<number> | { a?: number; b?: number; c?: number; d?: number; e?: number; f?: number }) {
+          if (!init) {
+            return;
+          }
+
+          if (Symbol.iterator in Object(init)) {
+            const values = Array.from(init as Iterable<number>);
+
+            if (values.length >= 6) {
+              [this.a, this.b, this.c, this.d, this.e, this.f] = values;
+            }
+
+            return;
+          }
+
+          const matrix = init as {
+            a?: number;
+            b?: number;
+            c?: number;
+            d?: number;
+            e?: number;
+            f?: number;
+          };
+
+          this.a = matrix.a ?? this.a;
+          this.b = matrix.b ?? this.b;
+          this.c = matrix.c ?? this.c;
+          this.d = matrix.d ?? this.d;
+          this.e = matrix.e ?? this.e;
+          this.f = matrix.f ?? this.f;
+        }
+
+        multiplySelf(other: {
+          a: number;
+          b: number;
+          c: number;
+          d: number;
+          e: number;
+          f: number;
+        }): this {
+          const nextA = this.a * other.a + this.c * other.b;
+          const nextB = this.b * other.a + this.d * other.b;
+          const nextC = this.a * other.c + this.c * other.d;
+          const nextD = this.b * other.c + this.d * other.d;
+          const nextE = this.a * other.e + this.c * other.f + this.e;
+          const nextF = this.b * other.e + this.d * other.f + this.f;
+
+          this.a = nextA;
+          this.b = nextB;
+          this.c = nextC;
+          this.d = nextD;
+          this.e = nextE;
+          this.f = nextF;
+
+          return this;
+        }
+
+        preMultiplySelf(other: {
+          a: number;
+          b: number;
+          c: number;
+          d: number;
+          e: number;
+          f: number;
+        }): this {
+          const nextA = other.a * this.a + other.c * this.b;
+          const nextB = other.b * this.a + other.d * this.b;
+          const nextC = other.a * this.c + other.c * this.d;
+          const nextD = other.b * this.c + other.d * this.d;
+          const nextE = other.a * this.e + other.c * this.f + other.e;
+          const nextF = other.b * this.e + other.d * this.f + other.f;
+
+          this.a = nextA;
+          this.b = nextB;
+          this.c = nextC;
+          this.d = nextD;
+          this.e = nextE;
+          this.f = nextF;
+
+          return this;
+        }
+
+        translate(tx = 0, ty = 0): this {
+          return this.multiplySelf(
+            new SimpleDOMMatrix([1, 0, 0, 1, tx, ty]) as SimpleDOMMatrix,
+          );
+        }
+
+        scale(scaleX = 1, scaleY = scaleX): this {
+          return this.multiplySelf(
+            new SimpleDOMMatrix([scaleX, 0, 0, scaleY, 0, 0]) as SimpleDOMMatrix,
+          );
+        }
+
+        invertSelf(): this {
+          const determinant = this.a * this.d - this.b * this.c;
+
+          if (!determinant) {
+            this.a = Number.NaN;
+            this.b = Number.NaN;
+            this.c = Number.NaN;
+            this.d = Number.NaN;
+            this.e = Number.NaN;
+            this.f = Number.NaN;
+            return this;
+          }
+
+          const nextA = this.d / determinant;
+          const nextB = -this.b / determinant;
+          const nextC = -this.c / determinant;
+          const nextD = this.a / determinant;
+          const nextE = (this.c * this.f - this.d * this.e) / determinant;
+          const nextF = (this.b * this.e - this.a * this.f) / determinant;
+
+          this.a = nextA;
+          this.b = nextB;
+          this.c = nextC;
+          this.d = nextD;
+          this.e = nextE;
+          this.f = nextF;
+
+          return this;
+        }
+      }
+
+      globalScope.DOMMatrix = SimpleDOMMatrix as unknown as typeof DOMMatrix;
+    }
+
+    if (!globalScope.ImageData) {
+      class SimpleImageData {
+        readonly data: Uint8ClampedArray;
+        readonly width: number;
+        readonly height: number;
+
+        constructor(
+          dataOrWidth: Uint8ClampedArray | number,
+          width?: number,
+          height?: number,
+        ) {
+          if (typeof dataOrWidth === 'number') {
+            this.width = dataOrWidth;
+            this.height = width ?? 0;
+            this.data = new Uint8ClampedArray(this.width * this.height * 4);
+            return;
+          }
+
+          this.data = dataOrWidth;
+          this.width = width ?? 0;
+          this.height = height ?? 0;
+        }
+      }
+
+      globalScope.ImageData = SimpleImageData as unknown as typeof ImageData;
+    }
+
+    if (!globalScope.Path2D) {
+      class SimplePath2D {
+        addPath(): void {}
+        arc(): void {}
+        arcTo(): void {}
+        bezierCurveTo(): void {}
+        closePath(): void {}
+        ellipse(): void {}
+        lineTo(): void {}
+        moveTo(): void {}
+        quadraticCurveTo(): void {}
+        rect(): void {}
+        roundRect(): void {}
+      }
+
+      globalScope.Path2D = SimplePath2D as unknown as typeof Path2D;
+    }
   }
 
   private isRichPdfExtractionEnabled(): boolean {
