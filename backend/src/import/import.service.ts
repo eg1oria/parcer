@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,6 +19,8 @@ import { getPositiveIntConfig } from '../common/config/env-number';
 
 @Injectable()
 export class ImportService {
+  private readonly logger = new Logger(ImportService.name);
+
   constructor(
     private readonly configService: ConfigService,
     private readonly parserService: ParserService,
@@ -45,9 +48,29 @@ export class ImportService {
     });
 
     const format = dto.format ?? ParseFormat.AUTO;
+    this.logger.log(
+      `Extracted text (first 5000 chars):\n${extractedText.slice(0, 5000)}`,
+    );
     const questions = this.parserService.parseTextToQuestions(extractedText, {
       format,
     });
+    for (const [index, question] of questions.entries()) {
+      const qWarnings = this.questionWarnings(question);
+      if (qWarnings.length > 0) {
+        this.logger.warn(
+          `Q${index + 1} warnings: ${qWarnings.join(', ')}\n` +
+          `  text: ${JSON.stringify(question.text.slice(0, 100))}\n` +
+          `  imageUrls: ${JSON.stringify(question.imageUrls)}\n` +
+          `  variants(${question.variants.length}): ${JSON.stringify(
+            question.variants.map((v) => ({
+              text: v.text.slice(0, 60),
+              imageUrls: v.imageUrls,
+              isCorrect: v.isCorrect,
+            })),
+          )}`,
+        );
+      }
+    }
     const warnings = this.flattenWarnings(questions);
     const validQuestions = questions.filter(
       (question) => this.questionWarnings(question).length === 0,
