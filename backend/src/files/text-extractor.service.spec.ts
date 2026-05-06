@@ -180,6 +180,74 @@ describe('TextExtractorService', () => {
     expect(textOnlySpy).not.toHaveBeenCalled();
   });
 
+  it('applies the configured image timeout to each PDF page independently', async () => {
+    service = new TextExtractorService({
+      get: (key: string) =>
+        key === 'PDF_IMAGE_EXTRACTION_TIMEOUT_MS' ? '1500' : undefined,
+    } as ConfigService);
+
+    const pages = Array.from({ length: 3 }, (_, index) => ({
+      pageNumber: index + 1,
+      cleanup: jest.fn(),
+    }));
+    const doc = {
+      numPages: pages.length,
+      getPage: jest.fn((pageNumber: number) => pages[pageNumber - 1]),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+    const loadingTask = {
+      promise: Promise.resolve(doc),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.spyOn(service as never, 'getPdfJs').mockResolvedValue({
+      VerbosityLevel: { ERRORS: 0 },
+      getDocument: jest.fn(() => loadingTask),
+    } as never);
+    jest
+      .spyOn(service as never, 'extractPdfPageTextItems')
+      .mockResolvedValue([]);
+    jest
+      .spyOn(service as never, 'groupPdfTextItemsIntoLines')
+      .mockReturnValue([]);
+    const imageSpy = jest
+      .spyOn(service as never, 'extractPdfPageImagesSafely')
+      .mockResolvedValue([]);
+    jest
+      .spyOn(service as never, 'mergePdfPageContent')
+      .mockReturnValue('');
+
+    await expect(service['extractRichPdfText'](Buffer.from('pdf'))).resolves.toBe(
+      '',
+    );
+
+    expect(imageSpy).toHaveBeenCalledTimes(3);
+    expect(imageSpy).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      doc,
+      pages[0],
+      expect.any(Map),
+      1500,
+    );
+    expect(imageSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      doc,
+      pages[1],
+      expect.any(Map),
+      1500,
+    );
+    expect(imageSpy).toHaveBeenNthCalledWith(
+      3,
+      expect.anything(),
+      doc,
+      pages[2],
+      expect.any(Map),
+      1500,
+    );
+  });
+
   it('resolves page image objects without hanging on missing common objects', async () => {
     const buildPlacementSpy = jest
       .spyOn(service as never, 'buildPdfImagePlacement')

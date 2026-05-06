@@ -352,8 +352,7 @@ export class TextExtractorService {
     const doc = await loadingTask.promise;
     const pdfImageCache = new Map<string, string>();
     const pages: string[] = [];
-    const imageExtractionDeadline =
-      Date.now() + this.pdfImageExtractionTimeoutMs();
+    const imageExtractionTimeoutMs = this.pdfImageExtractionTimeoutMs();
 
     try {
       for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
@@ -367,7 +366,7 @@ export class TextExtractorService {
             doc,
             page,
             pdfImageCache,
-            imageExtractionDeadline,
+            imageExtractionTimeoutMs,
           );
 
           pages.push(this.mergePdfPageContent(lines, images));
@@ -420,18 +419,16 @@ export class TextExtractorService {
     doc: any,
     page: any,
     pdfImageCache: Map<string, string>,
-    imageExtractionDeadline: number,
+    imageExtractionTimeoutMs: number,
   ): Promise<PdfImagePlacement[]> {
-    const remainingImageBudgetMs = imageExtractionDeadline - Date.now();
-
-    if (remainingImageBudgetMs <= 0) {
+    if (imageExtractionTimeoutMs <= 0) {
       return [];
     }
 
     try {
       return await this.withTimeout(
         this.extractPdfPageImages(pdfjs, doc, page, pdfImageCache),
-        remainingImageBudgetMs,
+        imageExtractionTimeoutMs,
         [],
       );
     } catch (error) {
