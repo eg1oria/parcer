@@ -131,4 +131,52 @@ describe('TextExtractorService', () => {
       ].join('\n'),
     );
   });
+
+  it('prefers rich PDF extraction before pdftotext when rich mode is enabled', async () => {
+    service = new TextExtractorService({
+      get: (key: string) =>
+        key === 'PDF_RICH_EXTRACTION_ENABLED' ? 'true' : undefined,
+    } as ConfigService);
+
+    const richSpy = jest
+      .spyOn(service as never, 'extractRichPdfText')
+      .mockResolvedValue('rich result');
+    const popplerSpy = jest
+      .spyOn(service as never, 'extractPdfTextWithPoppler')
+      .mockResolvedValue('poppler result');
+    const textOnlySpy = jest
+      .spyOn(service as never, 'extractTextOnlyPdfText')
+      .mockResolvedValue('text-only result');
+
+    await expect(service['extractPdfText'](Buffer.from('pdf'))).resolves.toBe(
+      'rich result',
+    );
+    expect(richSpy).toHaveBeenCalledTimes(1);
+    expect(popplerSpy).not.toHaveBeenCalled();
+    expect(textOnlySpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to pdftotext when rich PDF extraction fails', async () => {
+    service = new TextExtractorService({
+      get: (key: string) =>
+        key === 'PDF_RICH_EXTRACTION_ENABLED' ? 'true' : undefined,
+    } as ConfigService);
+
+    const richSpy = jest
+      .spyOn(service as never, 'extractRichPdfText')
+      .mockRejectedValue(new Error('rich failed'));
+    const popplerSpy = jest
+      .spyOn(service as never, 'extractPdfTextWithPoppler')
+      .mockResolvedValue('poppler result');
+    const textOnlySpy = jest
+      .spyOn(service as never, 'extractTextOnlyPdfText')
+      .mockResolvedValue('text-only result');
+
+    await expect(service['extractPdfText'](Buffer.from('pdf'))).resolves.toBe(
+      'poppler result',
+    );
+    expect(richSpy).toHaveBeenCalledTimes(1);
+    expect(popplerSpy).toHaveBeenCalledTimes(1);
+    expect(textOnlySpy).not.toHaveBeenCalled();
+  });
 });

@@ -284,6 +284,20 @@ export class TextExtractorService {
   }
 
   private async extractPdfText(buffer: Buffer): Promise<string> {
+    const richPdfExtractionEnabled = this.isRichPdfExtractionEnabled();
+
+    if (richPdfExtractionEnabled) {
+      try {
+        return await this.extractRichPdfText(buffer);
+      } catch (error) {
+        this.logger.warn(
+          `rich PDF extraction failed, falling back to text extraction: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
+
     try {
       return await this.extractPdfTextWithPoppler(buffer);
     } catch (error) {
@@ -294,19 +308,11 @@ export class TextExtractorService {
       );
     }
 
-    const extractMethod = this.isRichPdfExtractionEnabled()
-      ? this.extractRichPdfText(buffer)
-      : this.extractTextOnlyPdfText(buffer);
-
     try {
-      return await extractMethod;
+      return await this.extractTextOnlyPdfText(buffer);
     } catch (error) {
-      const modeLabel = this.isRichPdfExtractionEnabled()
-        ? 'rich'
-        : 'text-only';
-
       this.logger.warn(
-        `${modeLabel} PDF extraction failed: ${
+        `text-only PDF extraction failed: ${
           error instanceof Error ? error.message : 'unknown error'
         }`,
       );
