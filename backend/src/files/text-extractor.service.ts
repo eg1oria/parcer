@@ -626,8 +626,8 @@ export class TextExtractorService {
         }
 
         const image =
-          (await this.resolvePdfEmbeddedImage(page.commonObjs, name)) ??
-          (await this.resolvePdfEmbeddedImage(page.objs, name));
+          (await this.resolvePdfEmbeddedImage(page.objs, name)) ??
+          this.resolvePdfEmbeddedCommonImage(page.commonObjs, name);
 
         if (!image) {
           continue;
@@ -665,8 +665,8 @@ export class TextExtractorService {
         }
 
         const image =
-          (await this.resolvePdfEmbeddedImage(page.commonObjs, name)) ??
-          (await this.resolvePdfEmbeddedImage(page.objs, name));
+          (await this.resolvePdfEmbeddedImage(page.objs, name)) ??
+          this.resolvePdfEmbeddedCommonImage(page.commonObjs, name);
 
         if (!image) {
           continue;
@@ -818,6 +818,22 @@ export class TextExtractorService {
         resolve(this.normalizeResolvedPdfImage(name, image));
       });
     });
+  }
+
+  private resolvePdfEmbeddedCommonImage(
+    objectStore: any,
+    name: string,
+  ): ResolvedPdfImage | null {
+    if (
+      !objectStore ||
+      typeof objectStore.get !== 'function' ||
+      typeof objectStore.has !== 'function' ||
+      !objectStore.has(name)
+    ) {
+      return null;
+    }
+
+    return this.normalizeResolvedPdfImage(name, objectStore.get(name));
   }
 
   private normalizeResolvedPdfImage(

@@ -179,4 +179,67 @@ describe('TextExtractorService', () => {
     expect(popplerSpy).toHaveBeenCalledTimes(1);
     expect(textOnlySpy).not.toHaveBeenCalled();
   });
+
+  it('resolves page image objects without hanging on missing common objects', async () => {
+    const buildPlacementSpy = jest
+      .spyOn(service as never, 'buildPdfImagePlacement')
+      .mockResolvedValue({
+        url: '/media/imported-tests/aa/formula.png',
+        left: 10,
+        right: 20,
+        top: 30,
+        bottom: 40,
+      });
+
+    const images = await service['extractPdfPageImages'](
+      {
+        OPS: {
+          save: 1,
+          restore: 2,
+          transform: 3,
+          paintInlineImageXObject: 4,
+          paintImageXObject: 5,
+          paintImageXObjectRepeat: 6,
+        },
+        Util: {
+          transform: jest.fn(),
+        },
+      } as never,
+      {} as never,
+      {
+        getViewport: () => ({ transform: [1, 0, 0, 1, 0, 0] }),
+        getOperatorList: async () => ({
+          fnArray: [5],
+          argsArray: [['img_p0_1']],
+        }),
+        commonObjs: {
+          has: jest.fn(() => false),
+          get: jest.fn(),
+        },
+        objs: {
+          get: jest.fn((name: string, callback: (image: unknown) => void) =>
+            callback({
+              name,
+              width: 120,
+              height: 40,
+              kind: 2,
+              data: new Uint8Array([255, 255, 255]),
+            }),
+          ),
+        },
+      } as never,
+      new Map(),
+    );
+
+    expect(images).toEqual([
+      {
+        url: '/media/imported-tests/aa/formula.png',
+        left: 10,
+        right: 20,
+        top: 30,
+        bottom: 40,
+      },
+    ]);
+    expect(buildPlacementSpy).toHaveBeenCalledTimes(1);
+  });
 });
