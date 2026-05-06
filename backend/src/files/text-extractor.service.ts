@@ -599,22 +599,32 @@ export class TextExtractorService {
           continue;
         }
 
-        const placement = await this.buildPdfImagePlacement(
-          pdfjs,
-          image,
-          transformMatrix,
-          viewport,
-          pdfImageCache,
-        );
+        try {
+          const placement = await this.buildPdfImagePlacement(
+            pdfjs,
+            image,
+            transformMatrix,
+            viewport,
+            pdfImageCache,
+          );
 
-        if (placement) {
-          images.push(placement);
+          if (placement) {
+            images.push(placement);
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Failed to process inline image at index ${index}: ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
         }
 
         continue;
       }
 
-      if (fn === pdfjs.OPS.paintImageXObject) {
+      const isXObjectOp =
+        fn === pdfjs.OPS.paintImageXObject ||
+        fn === pdfjs.OPS.paintJpegXObject;
+
+      if (isXObjectOp) {
         const name = args?.[0];
 
         if (typeof name !== 'string') {
@@ -629,16 +639,22 @@ export class TextExtractorService {
           continue;
         }
 
-        const placement = await this.buildPdfImagePlacement(
-          pdfjs,
-          image,
-          transformMatrix,
-          viewport,
-          pdfImageCache,
-        );
+        try {
+          const placement = await this.buildPdfImagePlacement(
+            pdfjs,
+            image,
+            transformMatrix,
+            viewport,
+            pdfImageCache,
+          );
 
-        if (placement) {
-          images.push(placement);
+          if (placement) {
+            images.push(placement);
+          }
+        } catch (error) {
+          this.logger.warn(
+            `Failed to process XObject image "${name}": ${error instanceof Error ? error.message : 'unknown error'}`,
+          );
         }
 
         continue;
@@ -680,16 +696,23 @@ export class TextExtractorService {
             positions[positionIndex] ?? 0,
             positions[positionIndex + 1] ?? 0,
           ]);
-          const placement = await this.buildPdfImagePlacement(
-            pdfjs,
-            image,
-            repeatTransform,
-            viewport,
-            pdfImageCache,
-          );
 
-          if (placement) {
-            images.push(placement);
+          try {
+            const placement = await this.buildPdfImagePlacement(
+              pdfjs,
+              image,
+              repeatTransform,
+              viewport,
+              pdfImageCache,
+            );
+
+            if (placement) {
+              images.push(placement);
+            }
+          } catch (error) {
+            this.logger.warn(
+              `Failed to process repeated XObject image "${name}" at position ${positionIndex}: ${error instanceof Error ? error.message : 'unknown error'}`,
+            );
           }
         }
       }
@@ -872,28 +895,41 @@ export class TextExtractorService {
     pdfjs: PdfJsModule,
     image: ResolvedPdfImage,
   ): Promise<Buffer> {
-    const rgbaBuffer =
-      image.kind === pdfjs.ImageKind.RGBA_32BPP
-        ? Buffer.from(image.data)
-        : Buffer.from(
-            this.convertPdfPixelsToRgba({
-              pdfjs,
-              width: image.width,
-              height: image.height,
-              kind: image.kind,
-              src: image.data,
-            }),
-          );
+    if (image.kind === pdfjs.ImageKind.RGBA_32BPP) {
+      return sharp(Buffer.from(image.data), {
+        raw: { width: image.width, height: image.height, channels: 4 },
+      })
+        .png()
+        .toBuffer();
+    }
 
-    return sharp(rgbaBuffer, {
-      raw: {
-        width: image.width,
-        height: image.height,
-        channels: 4,
-      },
-    })
-      .png()
-      .toBuffer();
+    if (
+      image.kind === pdfjs.ImageKind.RGB_24BPP ||
+      image.kind === pdfjs.ImageKind.GRAYSCALE_1BPP
+    ) {
+      const rgbaBuffer = Buffer.from(
+        this.convertPdfPixelsToRgba({
+          pdfjs,
+          width: image.width,
+          height: image.height,
+          kind: image.kind,
+          src: image.data,
+        }),
+      );
+
+      return sharp(rgbaBuffer, {
+        raw: { width: image.width, height: image.height, channels: 4 },
+      })
+        .png()
+        .toBuffer();
+    }
+
+    // Unknown kind — try to decode raw data directly with sharp as a last resort
+    this.logger.warn(
+      `Unknown PDF image kind ${image.kind} for "${image.name}", attempting raw sharp decode`,
+    );
+
+    return sharp(Buffer.from(image.data)).png().toBuffer();
   }
 
   private convertPdfPixelsToRgba({
