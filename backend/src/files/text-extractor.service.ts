@@ -69,9 +69,9 @@ const ALWAYS_CONVERT_TO_PNG_EXTENSIONS = new Set([
   '.wmf',
 ]);
 
-const PDF_IMAGE_MIN_SIZE_PX = 20;
+const PDF_IMAGE_MIN_SIZE_PX = 10;
 const PDF_LINE_Y_THRESHOLD = 5;
-const PDF_SAME_ROW_THRESHOLD = 4;
+const PDF_SAME_ROW_THRESHOLD = 8;
 const PDF_TEXT_GAP_THRESHOLD = 2;
 const DEFAULT_PDF_IMAGE_EXTRACTION_TIMEOUT_MS = 15_000;
 const EXTERNAL_IMAGE_CONVERSION_TIMEOUT_MS = 20_000;
@@ -957,37 +957,44 @@ export class TextExtractorService {
     lines: PdfLine[],
     images: PdfImagePlacement[],
   ): string {
-    const entries = [
-      ...lines.map((line) => ({
-        top: (line.top + line.bottom) / 2,
-        left: line.left,
-        kind: 'line' as const,
-        text: line.text,
-      })),
-      ...images.map((image) => ({
-        top: (image.top + image.bottom) / 2,
-        left: image.left,
-        kind: 'image' as const,
-        text: this.toImageMarker(image.url),
-      })),
-    ]
-      .filter((entry) => entry.text.trim().length > 0)
-      .sort((leftEntry, rightEntry) => {
-        const verticalDelta = leftEntry.top - rightEntry.top;
+    const lineEntries = lines.map((line) => ({
+      sortY: line.bottom,
+      left: line.left,
+      kind: 'line' as const,
+      text: line.text,
+      height: line.bottom - line.top,
+    }));
 
-        if (Math.abs(verticalDelta) > PDF_SAME_ROW_THRESHOLD) {
+    const imageEntries = images.map((image) => ({
+      sortY: image.bottom,
+      left: image.left,
+      kind: 'image' as const,
+      text: this.toImageMarker(image.url),
+      height: image.bottom - image.top,
+    }));
+
+    const entries = [...lineEntries, ...imageEntries]
+      .filter((entry) => entry.text.trim().length > 0)
+      .sort((a, b) => {
+        const rowThreshold = Math.max(
+          PDF_SAME_ROW_THRESHOLD,
+          Math.min(a.height, b.height) * 0.5,
+        );
+        const verticalDelta = a.sortY - b.sortY;
+
+        if (Math.abs(verticalDelta) > rowThreshold) {
           return verticalDelta;
         }
 
-        if (Math.abs(leftEntry.left - rightEntry.left) > 1) {
-          return leftEntry.left - rightEntry.left;
+        if (Math.abs(a.left - b.left) > 1) {
+          return a.left - b.left;
         }
 
-        if (leftEntry.kind === rightEntry.kind) {
+        if (a.kind === b.kind) {
           return 0;
         }
 
-        return leftEntry.kind === 'line' ? -1 : 1;
+        return a.kind === 'line' ? -1 : 1;
       });
 
     return entries
