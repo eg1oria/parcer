@@ -622,7 +622,7 @@ export class TextExtractorService {
 
       const isXObjectOp =
         fn === pdfjs.OPS.paintImageXObject ||
-        fn === pdfjs.OPS.paintJpegXObject;
+        fn === pdfjs.OPS.paintXObject;
 
       if (isXObjectOp) {
         const name = args?.[0];
