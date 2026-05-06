@@ -563,6 +563,20 @@ export class TextExtractorService {
     const operatorList = await page.getOperatorList();
     let transformMatrix = [1, 0, 0, 1, 0, 0];
     const transformStack: Array<number[]> = [];
+
+    const opCounts: Record<string, number> = {};
+    for (const fn of operatorList.fnArray as number[]) {
+      const key = String(fn);
+      opCounts[key] = (opCounts[key] ?? 0) + 1;
+    }
+    const imageOps = [
+      pdfjs.OPS.paintImageXObject,
+      pdfjs.OPS.paintXObject,
+      pdfjs.OPS.paintInlineImageXObject,
+      pdfjs.OPS.paintImageXObjectRepeat,
+    ].map((op) => `${op}:${opCounts[String(op)] ?? 0}`);
+    this.logger.log(`Page ${page.pageNumber as number} ops [imageXObject, XObject, inlineImage, repeatImage]: ${imageOps.join(', ')}`);
+
     const images: PdfImagePlacement[] = [];
 
     for (let index = 0; index < operatorList.fnArray.length; index += 1) {
@@ -636,6 +650,13 @@ export class TextExtractorService {
           this.resolvePdfEmbeddedCommonImage(page.commonObjs, name);
 
         if (!image) {
+          const rawObj = (page.objs as any).has?.(name)
+            ? (page.objs as any).get(name)
+            : undefined;
+          this.logger.warn(
+            `Page ${page.pageNumber as number}: XObject "${name}" resolved to null. ` +
+              `raw keys: ${rawObj ? Object.keys(rawObj as object).join(',') : 'not in page.objs'}`,
+          );
           continue;
         }
 
@@ -856,6 +877,12 @@ export class TextExtractorService {
     const kind = typeof image.kind === 'number' ? image.kind : null;
 
     if (!width || !height || kind === null) {
+      this.logger.warn(
+        `normalizeResolvedPdfImage "${name}": rejected. ` +
+          `width=${JSON.stringify(image.width)}, height=${JSON.stringify(image.height)}, ` +
+          `kind=${JSON.stringify(image.kind)}, dataType=${Object.prototype.toString.call(image.data)}, ` +
+          `keys=${Object.keys(image).join(',')}`,
+      );
       return null;
     }
 
