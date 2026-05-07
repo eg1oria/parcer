@@ -27,7 +27,9 @@ services:
       context: ./backend
       provenance: false
     volumes:
-      - imported_test_images:/app/.tmp/imported-tests
+      - type: bind
+        source: ${HOST_IMPORTED_IMAGE_STORAGE_PATH:-./backend/.tmp/imported-tests}
+        target: ${IMPORTED_IMAGE_STORAGE_PATH:-/app/.tmp/imported-tests}
     expose:
       - '5000'
     ports:
@@ -44,6 +46,7 @@ services:
       RAW_IMPORT_MAX_CHARS: ${RAW_IMPORT_MAX_CHARS:-100000}
       MAX_UPLOAD_FILE_SIZE_BYTES: ${MAX_UPLOAD_FILE_SIZE_BYTES:-10485760}
       MAX_REQUEST_BODY_SIZE_BYTES: ${MAX_REQUEST_BODY_SIZE_BYTES:-1048576}
+      IMPORTED_IMAGE_STORAGE_PATH: ${IMPORTED_IMAGE_STORAGE_PATH:-/app/.tmp/imported-tests}
       PDF_IMAGE_EXTRACTION_TIMEOUT_MS: ${PDF_IMAGE_EXTRACTION_TIMEOUT_MS:-15000}
       PDF_TEXT_EXTRACTION_TIMEOUT_MS: ${PDF_TEXT_EXTRACTION_TIMEOUT_MS:-30000}
       PDF_RICH_EXTRACTION_ENABLED: ${PDF_RICH_EXTRACTION_ENABLED:-true}
@@ -93,4 +96,3 @@ services:
 
 volumes:
   postgres_data:
-  imported_test_images:

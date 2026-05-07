@@ -20,10 +20,11 @@ export const SUPPORTED_MIME_TYPES = [
 ] as const;
 
 export const IMPORTED_IMAGE_ROUTE_PREFIX = '/media/imported-tests';
+const configuredImportedImageStoragePath =
+  process.env.IMPORTED_IMAGE_STORAGE_PATH?.trim();
 export const IMPORTED_IMAGE_STORAGE_PATH = resolve(
   process.cwd(),
-  '.tmp',
-  'imported-tests',
+  configuredImportedImageStoragePath || '.tmp/imported-tests',
 );
 export const IMPORTED_IMAGE_PREVIEW_SEGMENT = 'preview';
 export const IMPORTED_IMAGE_PREVIEW_ROUTE_PREFIX = `${IMPORTED_IMAGE_ROUTE_PREFIX}/${IMPORTED_IMAGE_PREVIEW_SEGMENT}`;
