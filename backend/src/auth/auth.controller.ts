@@ -1,4 +1,10 @@
-import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
@@ -8,6 +14,7 @@ import {
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { AuthUser } from '../common/types/auth-user.type';
+import { AuthRateLimitGuard } from './auth-rate-limit.guard';
 import { AuthService, AuthResponse } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -18,12 +25,14 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
+  @UseGuards(AuthRateLimitGuard)
   @ApiCreatedResponse({ description: 'User registered and signed in.' })
   register(@Body() dto: RegisterDto): Promise<AuthResponse> {
     return this.authService.register(dto);
   }
 
   @Post('login')
+  @UseGuards(AuthRateLimitGuard)
   @ApiOkResponse({ description: 'User signed in.' })
   login(@Body() dto: LoginDto): Promise<AuthResponse> {
     return this.authService.login(dto);

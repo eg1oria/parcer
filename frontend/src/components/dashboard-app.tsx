@@ -25,17 +25,22 @@ import {
 import {
   ApiError,
   confirmImport,
+  discardImportPreview,
   getCurrentUser,
   login,
   previewImport,
   register,
 } from "@/lib/api";
 import {
+  clearStoredImportPreviewSourceFileId,
   clearStoredSession,
+  readStoredImportPreviewSourceFileId,
   readStoredSession,
+  saveStoredImportPreviewSourceFileId,
   saveStoredSession,
 } from "@/lib/session";
 import { getSafeQuestionImageUrls } from "@/lib/images";
+import { SESSION_CHECK_TIMEOUT_MS } from "@/lib/app-constants";
 import type {
   AuthResponse,
   AuthUser,
@@ -79,7 +84,6 @@ const dangerButtonClass =
   "inline-flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-3 py-2 text-center text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:text-stone-400";
 const panelClass =
   "rounded-md border border-stone-200 bg-white p-4 shadow-sm sm:p-5";
-const SESSION_CHECK_TIMEOUT_MS = 8000;
 const SESSION_CHECK_TIMEOUT_MESSAGE = "Session check timed out";
 
 export function DashboardApp() {
@@ -149,12 +153,12 @@ export function DashboardApp() {
     };
   }, [logout]);
 
-  const handleAuthenticated = (auth: AuthResponse) => {
+  const handleAuthenticated = useCallback((auth: AuthResponse) => {
     saveStoredSession(auth);
     setToken(auth.accessToken);
     setUser(auth.user);
     setAuthStatus("authenticated");
-  };
+  }, []);
 
   if (authStatus === "checking") {
     return <FullPageStatus label="Проверяем сессию" />;
@@ -370,6 +374,8 @@ function ImportPanel({
     number | null
   >(null);
   const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isPageUnloadRef = useRef(false);
+  const previewSourceFileIdRef = useRef<string | null>(null);
 
   const validationIssues = useMemo(
     () => getImportValidationIssues(title, questions),
@@ -378,16 +384,108 @@ function ImportPanel({
   const canConfirm =
     Boolean(preview) && validationIssues.length === 0 && !confirmLoading;
 
+  const setActivePreviewSourceFileId = useCallback((sourceFileId: string | null) => {
+    previewSourceFileIdRef.current = sourceFileId;
+
+    if (sourceFileId) {
+      saveStoredImportPreviewSourceFileId(sourceFileId);
+      return;
+    }
+
+    clearStoredImportPreviewSourceFileId();
+  }, []);
+
+  const clearStoredPreviewIfMatches = useCallback((sourceFileId: string) => {
+    if (readStoredImportPreviewSourceFileId() === sourceFileId) {
+      clearStoredImportPreviewSourceFileId();
+    }
+  }, []);
+
+  const discardPreviewById = useCallback(
+    async (
+      sourceFileId: string,
+      options: { clearStoredPreview?: boolean } = {},
+    ) => {
+      const shouldClearStoredPreview = options.clearStoredPreview ?? true;
+
+      try {
+        await discardImportPreview(token, sourceFileId);
+
+        if (shouldClearStoredPreview) {
+          clearStoredPreviewIfMatches(sourceFileId);
+        }
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          onUnauthorized();
+          return;
+        }
+
+        if (error instanceof ApiError && error.status === 404) {
+          if (shouldClearStoredPreview) {
+            clearStoredPreviewIfMatches(sourceFileId);
+          }
+          return;
+        }
+
+        console.warn("Failed to discard import preview", error);
+      }
+    },
+    [clearStoredPreviewIfMatches, onUnauthorized, token],
+  );
+
+  const discardActivePreview = useCallback(
+    (options: { preserveStoredPreview?: boolean } = {}) => {
+      const sourceFileId = previewSourceFileIdRef.current;
+
+      if (!sourceFileId) {
+        return;
+      }
+
+      previewSourceFileIdRef.current = null;
+      void discardPreviewById(sourceFileId, {
+        clearStoredPreview: !options.preserveStoredPreview,
+      });
+    },
+    [discardPreviewById],
+  );
+
+  useEffect(() => {
+    const storedPreviewId = readStoredImportPreviewSourceFileId();
+
+    if (storedPreviewId) {
+      void discardPreviewById(storedPreviewId);
+    }
+  }, [discardPreviewById]);
+
+  useEffect(() => {
+    const handlePageHide = () => {
+      isPageUnloadRef.current = true;
+      discardActivePreview({ preserveStoredPreview: true });
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, [discardActivePreview]);
+
   useEffect(() => {
     return () => {
       if (focusTimeoutRef.current) {
         clearTimeout(focusTimeoutRef.current);
       }
+
+      if (!isPageUnloadRef.current) {
+        discardActivePreview();
+      }
     };
-  }, []);
+  }, [discardActivePreview]);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const nextFile = event.target.files?.[0] ?? null;
+
+    discardActivePreview();
     setFile(nextFile);
     setPreview(null);
     setQuestions([]);
@@ -413,6 +511,7 @@ function ImportPanel({
     }
 
     setPreviewLoading(true);
+    const previousPreviewId = previewSourceFileIdRef.current;
 
     try {
       const result = await previewImport(token, {
@@ -421,10 +520,14 @@ function ImportPanel({
         format,
       });
 
+      setActivePreviewSourceFileId(result.file.id);
       setPreview(result);
       setTitle(result.title);
       setQuestions(normalizeQuestions(result.questions));
       setFocusedQuestionIndex(null);
+      if (previousPreviewId && previousPreviewId !== result.file.id) {
+        void discardPreviewById(previousPreviewId);
+      }
       setNotice({
         tone: "success",
         title: "Превью готово",
@@ -473,6 +576,7 @@ function ImportPanel({
         title: `Тест сохранен: ${result.title}`,
         messages: [`Вопросов: ${result.questionsCount}`],
       });
+      setActivePreviewSourceFileId(null);
       setFile(null);
       setPreview(null);
       setQuestions([]);
@@ -587,6 +691,7 @@ function ImportPanel({
             type="button"
             className={`${secondaryButtonClass} w-full sm:w-auto`}
             onClick={() => {
+              discardActivePreview();
               setPreview(null);
               setQuestions([]);
               setNotice(null);
@@ -1140,13 +1245,17 @@ export function TestsPanel({
   loading,
   error,
   onRefresh,
+  onDelete,
 }: {
   tests: TestListItem[];
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
+  onDelete: (test: TestListItem) => Promise<void>;
 }) {
   const [copiedTestId, setCopiedTestId] = useState<string | null>(null);
+  const [deletingTestId, setDeletingTestId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -1177,6 +1286,33 @@ export function TestsPanel({
     }
   }
 
+  async function handleDelete(test: TestListItem) {
+    if (deletingTestId) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(
+      `Удалить тест "${test.title}"? Это действие нельзя отменить.`,
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setDeleteError(null);
+    setDeletingTestId(test.id);
+
+    try {
+      await onDelete(test);
+    } catch (error) {
+      setDeleteError(getReadableError(error));
+    } finally {
+      setDeletingTestId((currentId) =>
+        currentId === test.id ? null : currentId,
+      );
+    }
+  }
+
   return (
     <aside className={panelClass}>
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1203,6 +1339,14 @@ export function TestsPanel({
         <Notice tone="error" title="Не удалось загрузить тесты" messages={[error]} />
       ) : null}
 
+      {deleteError ? (
+        <Notice
+          tone="error"
+          title="Не удалось удалить тест"
+          messages={[deleteError]}
+        />
+      ) : null}
+
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {loading && tests.length === 0 ? (
           <div className="flex min-h-28 items-center justify-center rounded-md border border-stone-200 bg-stone-50 text-sm text-stone-500 sm:col-span-2 lg:col-span-3">
@@ -1217,11 +1361,14 @@ export function TestsPanel({
           </div>
         ) : null}
 
-        {tests.map((test) => (
-          <article
-            key={test.id}
-            className="flex h-full flex-col rounded-md border border-stone-200 bg-white p-4 transition hover:border-stone-300"
-          >
+        {tests.map((test) => {
+          const isDeleting = deletingTestId === test.id;
+
+          return (
+            <article
+              key={test.id}
+              className="flex h-full flex-col rounded-md border border-stone-200 bg-white p-4 transition hover:border-stone-300"
+            >
             <div className="flex-1">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -1245,7 +1392,7 @@ export function TestsPanel({
               </div>
             </div>
 
-            <div className="mt-auto pt-4">
+            <div className="mt-auto space-y-2 pt-4">
               <Link
                 className={`${primaryButtonClass} w-full`}
                 href={`/tests/${test.id}`}
@@ -1255,7 +1402,7 @@ export function TestsPanel({
               </Link>
               <button
                 type="button"
-                className={`${secondaryButtonClass} mt-2 w-full`}
+                className={`${secondaryButtonClass} w-full`}
                 onClick={() => {
                   void handleShare(test);
                 }}
@@ -1267,9 +1414,25 @@ export function TestsPanel({
                 )}
                 {copiedTestId === test.id ? "Ссылка скопирована" : "Поделиться"}
               </button>
+              <button
+                type="button"
+                className={`${dangerButtonClass} w-full justify-center`}
+                onClick={() => {
+                  void handleDelete(test);
+                }}
+                disabled={isDeleting}
+              >
+                {isDeleting ? (
+                  <Loader2 className="animate-spin" size={17} aria-hidden="true" />
+                ) : (
+                  <Trash2 size={17} aria-hidden="true" />
+                )}
+                {isDeleting ? "Удаление..." : "Удалить"}
+              </button>
             </div>
           </article>
-        ))}
+          );
+        })}
       </div>
     </aside>
   );
@@ -1444,10 +1607,16 @@ async function copyToClipboard(value: string): Promise<void> {
 }
 
 function formatDate(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Дата недоступна";
+  }
+
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 export function getReadableError(error: unknown): string {

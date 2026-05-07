@@ -42,6 +42,43 @@ export class TestsService {
     return test;
   }
 
+  async remove(userId: string, id: string) {
+    const test = await this.prisma.test.findFirst({
+      where: { id, userId },
+      select: {
+        id: true,
+        sourceFileId: true,
+      },
+    });
+
+    if (!test) {
+      throw new NotFoundException('Test not found');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.test.delete({
+        where: { id: test.id },
+      });
+
+      if (!test.sourceFileId) {
+        return;
+      }
+
+      const remainingTests = await tx.test.count({
+        where: { sourceFileId: test.sourceFileId },
+      });
+
+      if (remainingTests === 0) {
+        await tx.uploadedFile.deleteMany({
+          where: {
+            id: test.sourceFileId,
+            userId,
+          },
+        });
+      }
+    });
+  }
+
   async copyPublicTest(userId: string, sourceTestId: string) {
     const sourceTest = await this.getPublicSourceTest(sourceTestId);
 

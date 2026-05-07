@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, FileQuestion, LogOut } from "lucide-react";
-import { ApiError, getCurrentUser, getTests } from "@/lib/api";
+import { ApiError, deleteTest, getCurrentUser, getTests } from "@/lib/api";
 import {
   clearStoredSession,
   readStoredSession,
@@ -118,12 +118,42 @@ export function TestsApp() {
     }
   }, [authStatus, loadTests, token]);
 
-  const handleAuthenticated = (auth: AuthResponse) => {
+  const handleAuthenticated = useCallback((auth: AuthResponse) => {
     saveStoredSession(auth);
     setToken(auth.accessToken);
     setUser(auth.user);
     setAuthStatus("authenticated");
-  };
+  }, []);
+
+  const handleDeleteTest = useCallback(
+    async (test: TestListItem) => {
+      if (!token) {
+        return;
+      }
+
+      try {
+        await deleteTest(token, test.id);
+        setTests((currentTests) =>
+          currentTests.filter((currentTest) => currentTest.id !== test.id),
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          logout();
+          return;
+        }
+
+        if (error instanceof ApiError && error.status === 404) {
+          setTests((currentTests) =>
+            currentTests.filter((currentTest) => currentTest.id !== test.id),
+          );
+          return;
+        }
+
+        throw error;
+      }
+    },
+    [logout, token],
+  );
 
   if (authStatus === "checking") {
     return <FullPageStatus label="Проверяем сессию" />;
@@ -175,6 +205,7 @@ export function TestsApp() {
           loading={testsLoading}
           error={testsError}
           onRefresh={() => loadTests(token)}
+          onDelete={handleDeleteTest}
         />
       </div>
     </main>

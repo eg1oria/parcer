@@ -1,11 +1,29 @@
+import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ImportedImageStorageService } from './imported-image-storage.service';
 import { TextExtractorService } from './text-extractor.service';
 
 describe('TextExtractorService', () => {
   let service: TextExtractorService;
 
+  function createService(configService: ConfigService = {} as ConfigService) {
+    return new TextExtractorService(
+      configService,
+      {
+        storePermanentImage: jest.fn(async (_buffer: Buffer, extension: string) => ({
+          created: true,
+          url: `/media/imported-tests/aa/test${extension || '.png'}`,
+        })),
+        storePreviewImage: jest.fn(
+          async (_draftId: string, _buffer: Buffer, extension: string) =>
+            `/media/imported-tests/preview/draft/test${extension || '.png'}`,
+        ),
+      } as unknown as ImportedImageStorageService,
+    );
+  }
+
   beforeEach(() => {
-    service = new TextExtractorService({} as ConfigService);
+    service = createService();
   });
 
   it('linearizes Word equation XML inside tagged variants', () => {
@@ -75,6 +93,24 @@ describe('TextExtractorService', () => {
     expect(result.text).toContain('<variant> Text answer');
   });
 
+  it('rejects DOCX relationship targets that escape the archive root', () => {
+    expect(
+      service['resolveDocxRelationshipTarget'](
+        'word/document.xml',
+        '../../media/image1.png',
+      ),
+    ).toBeNull();
+  });
+
+  it('resolves DOCX relationship targets that stay inside the archive root', () => {
+    expect(
+      service['resolveDocxRelationshipTarget'](
+        'word/document.xml',
+        'media/image1.png',
+      ),
+    ).toBe('word/media/image1.png');
+  });
+
   it('places PDF images after the nearest text block so question and variant ownership is preserved', () => {
     const result = service['mergePdfPageContent'](
       [
@@ -133,7 +169,7 @@ describe('TextExtractorService', () => {
   });
 
   it('prefers rich PDF extraction before pdftotext when rich mode is enabled', async () => {
-    service = new TextExtractorService({
+    service = createService({
       get: (key: string) =>
         key === 'PDF_RICH_EXTRACTION_ENABLED' ? 'true' : undefined,
     } as ConfigService);
@@ -157,7 +193,7 @@ describe('TextExtractorService', () => {
   });
 
   it('falls back to pdftotext when rich PDF extraction fails', async () => {
-    service = new TextExtractorService({
+    service = createService({
       get: (key: string) =>
         key === 'PDF_RICH_EXTRACTION_ENABLED' ? 'true' : undefined,
     } as ConfigService);
@@ -180,8 +216,46 @@ describe('TextExtractorService', () => {
     expect(textOnlySpy).not.toHaveBeenCalled();
   });
 
+  it('preserves PDF fallback details in the final exception cause', async () => {
+    service = createService({
+      get: (key: string) =>
+        key === 'PDF_RICH_EXTRACTION_ENABLED' ? 'true' : undefined,
+    } as ConfigService);
+
+    jest
+      .spyOn(service as never, 'extractRichPdfText')
+      .mockRejectedValue(new Error('rich failed'));
+    jest
+      .spyOn(service as never, 'extractPdfTextWithPoppler')
+      .mockRejectedValue(new Error('poppler failed'));
+    jest
+      .spyOn(service as never, 'extractTextOnlyPdfText')
+      .mockRejectedValue(new Error('text-only failed'));
+
+    try {
+      await service['extractPdfText'](Buffer.from('pdf'));
+      fail('Expected extractPdfText to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(BadRequestException);
+
+      const extractionError = error as BadRequestException & {
+        cause?: Error;
+      };
+
+      expect(extractionError.cause).toBeInstanceOf(Error);
+      expect(extractionError.cause?.message).toContain('rich PDF extraction');
+      expect(extractionError.cause?.message).toContain('rich failed');
+      expect(extractionError.cause?.message).toContain('pdftotext extraction');
+      expect(extractionError.cause?.message).toContain('poppler failed');
+      expect(extractionError.cause?.message).toContain(
+        'text-only PDF extraction',
+      );
+      expect(extractionError.cause?.message).toContain('text-only failed');
+    }
+  });
+
   it('applies the configured image timeout to each PDF page independently', async () => {
-    service = new TextExtractorService({
+    service = createService({
       get: (key: string) =>
         key === 'PDF_IMAGE_EXTRACTION_TIMEOUT_MS' ? '1500' : undefined,
     } as ConfigService);
@@ -213,13 +287,11 @@ describe('TextExtractorService', () => {
     const imageSpy = jest
       .spyOn(service as never, 'extractPdfPageImagesSafely')
       .mockResolvedValue([]);
-    jest
-      .spyOn(service as never, 'mergePdfPageContent')
-      .mockReturnValue('');
+    jest.spyOn(service as never, 'mergePdfPageContent').mockReturnValue('');
 
-    await expect(service['extractRichPdfText'](Buffer.from('pdf'))).resolves.toBe(
-      '',
-    );
+    await expect(
+      service['extractRichPdfText'](Buffer.from('pdf')),
+    ).resolves.toBe('');
 
     expect(imageSpy).toHaveBeenCalledTimes(3);
     expect(imageSpy).toHaveBeenNthCalledWith(
@@ -229,6 +301,7 @@ describe('TextExtractorService', () => {
       pages[0],
       expect.any(Map),
       1500,
+      {},
     );
     expect(imageSpy).toHaveBeenNthCalledWith(
       2,
@@ -237,6 +310,7 @@ describe('TextExtractorService', () => {
       pages[1],
       expect.any(Map),
       1500,
+      {},
     );
     expect(imageSpy).toHaveBeenNthCalledWith(
       3,
@@ -245,7 +319,71 @@ describe('TextExtractorService', () => {
       pages[2],
       expect.any(Map),
       1500,
+      {},
     );
+  });
+
+  it('processes PDFs larger than 1 MB in 10-page batches', async () => {
+    service = createService({
+      get: () => undefined,
+    } as ConfigService);
+
+    const cleanupSnapshots: number[] = [];
+    const pages = Array.from({ length: 23 }, (_, index) => ({
+      pageNumber: index + 1,
+      cleanup: jest.fn(),
+    }));
+    const doc = {
+      numPages: pages.length,
+      getPage: jest.fn((pageNumber: number) => pages[pageNumber - 1]),
+      cleanup: jest.fn(() => {
+        cleanupSnapshots.push(doc.getPage.mock.calls.length);
+        return Promise.resolve(undefined);
+      }),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+    const loadingTask = {
+      promise: Promise.resolve(doc),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    };
+
+    jest.spyOn(service as never, 'getPdfJs').mockResolvedValue({
+      VerbosityLevel: { ERRORS: 0 },
+      getDocument: jest.fn(() => loadingTask),
+    } as never);
+    jest
+      .spyOn(service as never, 'extractPdfPageTextItems')
+      .mockImplementation((page: { pageNumber: number }) =>
+        Promise.resolve([
+          {
+            text: `page-${page.pageNumber}`,
+            x: 0,
+            y: page.pageNumber,
+            width: 10,
+            height: 10,
+            hasEOL: false,
+          },
+        ]),
+      );
+    jest
+      .spyOn(service as never, 'extractPdfPageImagesSafely')
+      .mockResolvedValue([]);
+    jest
+      .spyOn(service as never, 'mergePdfPageContent')
+      .mockImplementation(
+        (lines: Array<{ text: string }>) => lines[0]?.text ?? '',
+      );
+
+    await expect(
+      service['extractRichPdfText'](Buffer.alloc(1024 * 1024 + 1, 1)),
+    ).resolves.toBe(
+      Array.from({ length: 23 }, (_, index) => `page-${index + 1}`).join(
+        '\n\n',
+      ),
+    );
+
+    expect(cleanupSnapshots).toEqual([10, 20, 23]);
+    expect(doc.cleanup).toHaveBeenCalledTimes(3);
   });
 
   it('resolves page image objects without hanging on missing common objects', async () => {
@@ -273,13 +411,14 @@ describe('TextExtractorService', () => {
           transform: jest.fn(),
         },
       } as never,
-      {} as never,
+      {},
       {
         getViewport: () => ({ transform: [1, 0, 0, 1, 0, 0] }),
-        getOperatorList: async () => ({
-          fnArray: [5],
-          argsArray: [['img_p0_1']],
-        }),
+        getOperatorList: () =>
+          Promise.resolve({
+            fnArray: [5],
+            argsArray: [['img_p0_1']],
+          }),
         commonObjs: {
           has: jest.fn(() => false),
           get: jest.fn(),
@@ -295,7 +434,7 @@ describe('TextExtractorService', () => {
             }),
           ),
         },
-      } as never,
+      },
       new Map(),
     );
 
@@ -309,5 +448,61 @@ describe('TextExtractorService', () => {
       },
     ]);
     expect(buildPlacementSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('evicts the oldest PDF image cache entries when the cache reaches its limit', async () => {
+    service = createService({
+      get: (key: string) =>
+        key === 'PDF_IMAGE_CACHE_MAX_ENTRIES' ? '2' : undefined,
+    } as ConfigService);
+
+    jest
+      .spyOn(service as never, 'convertPdfImageToPngBuffer')
+      .mockResolvedValue(Buffer.from('png'));
+    jest
+      .spyOn(service as never, 'storeExtractedImage')
+      .mockResolvedValue('/media/imported-tests/cc/new.png');
+    jest.spyOn(service as never, 'buildPdfImageRect').mockReturnValue({
+      left: 1,
+      right: 2,
+      top: 3,
+      bottom: 4,
+    });
+
+    const pdfImageCache = new Map<string, string>([
+      ['first', '/media/imported-tests/aa/first.png'],
+      ['second', '/media/imported-tests/bb/second.png'],
+    ]);
+
+    const placement = await service['buildPdfImagePlacement'](
+      {
+        Util: {
+          transform: jest.fn(),
+        },
+      } as never,
+      {
+        name: 'third',
+        width: 32,
+        height: 32,
+        kind: 2,
+        data: new Uint8Array([1, 2, 3]),
+      },
+      [1, 0, 0, 1, 0, 0],
+      {
+        transform: [1, 0, 0, 1, 0, 0],
+      },
+      pdfImageCache,
+    );
+
+    expect(placement).toEqual({
+      url: '/media/imported-tests/cc/new.png',
+      left: 1,
+      right: 2,
+      top: 3,
+      bottom: 4,
+    });
+    expect(pdfImageCache.size).toBe(2);
+    expect(pdfImageCache.has('first')).toBe(false);
+    expect(pdfImageCache.has('second')).toBe(true);
   });
 });

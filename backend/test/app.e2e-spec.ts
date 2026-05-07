@@ -1,9 +1,19 @@
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { createHash } from 'node:crypto';
+import { access, mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { configureApp, NEST_APP_FACTORY_OPTIONS } from './../src/app.setup';
 import { AppModule } from './../src/app.module';
+import { AuthRateLimitService } from './../src/auth/auth-rate-limit.service';
+import {
+  IMPORTED_IMAGE_PREVIEW_ROUTE_PREFIX,
+  IMPORTED_IMAGE_PREVIEW_STORAGE_PATH,
+  IMPORTED_IMAGE_ROUTE_PREFIX,
+  IMPORTED_IMAGE_STORAGE_PATH,
+} from './../src/files/files.constants';
 import { PrismaService } from './../src/prisma/prisma.service';
 
 type AuthBody = {
@@ -75,6 +85,7 @@ type FinishBody = {
 
 describe('Backend MVP (e2e)', () => {
   let app: INestApplication<App>;
+  let authRateLimitService: AuthRateLimitService;
   let prisma: PrismaService;
 
   beforeAll(async () => {
@@ -91,15 +102,18 @@ describe('Backend MVP (e2e)', () => {
     configureApp(app);
     await app.init();
 
+    authRateLimitService = app.get(AuthRateLimitService);
     prisma = app.get(PrismaService);
     await cleanDatabase();
   });
 
   afterEach(async () => {
     await cleanDatabase();
+    authRateLimitService.reset();
   });
 
   afterAll(async () => {
+    await cleanImportedImages();
     await app.close();
   });
 
@@ -423,6 +437,94 @@ describe('Backend MVP (e2e)', () => {
     }
   });
 
+  it('allows the owner to delete a test and blocks deletion from another user', async () => {
+    const owner = await register('delete-owner@example.com');
+    const stranger = await register('delete-stranger@example.com');
+
+    const preview = (
+      await request(app.getHttpServer())
+        .post('/import/file-preview')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .attach('file', Buffer.from(sampleRawText(), 'utf8'), {
+          filename: 'delete-me.txt',
+          contentType: 'text/plain',
+        })
+        .expect(200)
+    ).body as PreviewBody;
+
+    const createdTest = (
+      await request(app.getHttpServer())
+        .post('/import/confirm')
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .send({
+          title: 'Delete me',
+          sourceFileId: preview.file.id,
+          questions: preview.questions,
+        })
+        .expect(201)
+    ).body as ConfirmBody;
+
+    const started = (
+      await request(app.getHttpServer())
+        .post(`/tests/${createdTest.testId}/start`)
+        .set('Authorization', `Bearer ${owner.accessToken}`)
+        .expect(200)
+    ).body as StartBody;
+
+    await request(app.getHttpServer())
+      .post(`/tests/${createdTest.testId}/finish`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .send({
+        answers: started.questions.map((question) => {
+          const correctVariant = question.variants.find((variant) =>
+            isCorrectVariantText(question.text, variant.text),
+          );
+
+          if (!correctVariant) {
+            throw new Error(
+              `Correct variant not found for question "${question.text}"`,
+            );
+          }
+
+          return {
+            questionId: question.id,
+            variantId: correctVariant.id,
+          };
+        }),
+      })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .delete(`/tests/${createdTest.testId}`)
+      .set('Authorization', `Bearer ${stranger.accessToken}`)
+      .expect(404);
+
+    await request(app.getHttpServer())
+      .delete(`/tests/${createdTest.testId}`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(204);
+
+    await request(app.getHttpServer())
+      .get('/tests')
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual([]);
+      });
+
+    await request(app.getHttpServer())
+      .get(`/tests/${createdTest.testId}`)
+      .set('Authorization', `Bearer ${owner.accessToken}`)
+      .expect(404);
+
+    expect(await prisma.test.count()).toBe(0);
+    expect(await prisma.question.count()).toBe(0);
+    expect(await prisma.variant.count()).toBe(0);
+    expect(await prisma.attempt.count()).toBe(0);
+    expect(await prisma.attemptAnswer.count()).toBe(0);
+    expect(await prisma.uploadedFile.count()).toBe(0);
+  });
+
   it('accepts a larger confirm payload with embedded images', async () => {
     const auth = await register('images@example.com');
 
@@ -455,6 +557,209 @@ describe('Backend MVP (e2e)', () => {
     ).body as ConfirmBody;
 
     expect(confirm.questionsCount).toBe(2);
+  });
+
+  it('removes preview images when the imported preview is discarded', async () => {
+    const auth = await register('discard-preview@example.com');
+
+    const preview = (
+      await request(app.getHttpServer())
+        .post('/import/file-preview')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .attach('file', Buffer.from(sampleRawText(), 'utf8'), {
+          filename: 'discard.txt',
+          contentType: 'text/plain',
+        })
+        .expect(200)
+    ).body as PreviewBody;
+
+    const draftImageBuffer = Buffer.from('discard-preview-image');
+    const draftImageHash = createHash('sha256')
+      .update(draftImageBuffer)
+      .digest('hex');
+    const draftImageFileName = `${draftImageHash}.png`;
+    const draftImagePath = join(
+      IMPORTED_IMAGE_PREVIEW_STORAGE_PATH,
+      preview.file.id,
+      draftImageFileName,
+    );
+
+    await mkdir(join(IMPORTED_IMAGE_PREVIEW_STORAGE_PATH, preview.file.id), {
+      recursive: true,
+    });
+    await writeFile(draftImagePath, draftImageBuffer);
+
+    await request(app.getHttpServer())
+      .delete(`/import/file-preview/${preview.file.id}`)
+      .set('Authorization', `Bearer ${auth.accessToken}`)
+      .expect(204);
+
+    expect(await prisma.uploadedFile.count()).toBe(0);
+    await expect(fileExists(draftImagePath)).resolves.toBe(false);
+  });
+
+  it('promotes preview image urls to permanent storage only after import confirm', async () => {
+    const auth = await register('promote-preview@example.com');
+
+    const preview = (
+      await request(app.getHttpServer())
+        .post('/import/file-preview')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .attach('file', Buffer.from(sampleRawText(), 'utf8'), {
+          filename: 'promote.txt',
+          contentType: 'text/plain',
+        })
+        .expect(200)
+    ).body as PreviewBody;
+
+    const draftImageBuffer = Buffer.from('promote-preview-image');
+    const draftImageHash = createHash('sha256')
+      .update(draftImageBuffer)
+      .digest('hex');
+    const draftImageFileName = `${draftImageHash}.png`;
+    const draftImageUrl = `${IMPORTED_IMAGE_PREVIEW_ROUTE_PREFIX}/${preview.file.id}/${draftImageFileName}`;
+    const draftImagePath = join(
+      IMPORTED_IMAGE_PREVIEW_STORAGE_PATH,
+      preview.file.id,
+      draftImageFileName,
+    );
+    const expectedPermanentImageUrl = `${IMPORTED_IMAGE_ROUTE_PREFIX}/${draftImageHash.slice(0, 2)}/${draftImageFileName}`;
+    const expectedPermanentImagePath = join(
+      IMPORTED_IMAGE_STORAGE_PATH,
+      draftImageHash.slice(0, 2),
+      draftImageFileName,
+    );
+
+    await mkdir(join(IMPORTED_IMAGE_PREVIEW_STORAGE_PATH, preview.file.id), {
+      recursive: true,
+    });
+    await writeFile(draftImagePath, draftImageBuffer);
+
+    const confirm = (
+      await request(app.getHttpServer())
+        .post('/import/confirm')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .send({
+          title: 'Promoted preview image test',
+          sourceFileId: preview.file.id,
+          questions: [
+            {
+              text: 'Choose the preview image',
+              imageUrls: [draftImageUrl],
+              variants: [
+                {
+                  text: 'Correct answer',
+                  isCorrect: true,
+                },
+                {
+                  text: 'Wrong answer',
+                  isCorrect: false,
+                },
+              ],
+            },
+          ],
+        })
+        .expect(201)
+    ).body as ConfirmBody;
+
+    await request(app.getHttpServer())
+      .get(`/tests/${confirm.testId}`)
+      .set('Authorization', `Bearer ${auth.accessToken}`)
+      .expect(200)
+      .expect((response) => {
+        const body = response.body as {
+          questions: Array<{
+            imageUrls?: string[];
+          }>;
+        };
+
+        expect(body.questions[0].imageUrls).toEqual([expectedPermanentImageUrl]);
+      });
+
+    await expect(fileExists(draftImagePath)).resolves.toBe(false);
+    await expect(fileExists(expectedPermanentImagePath)).resolves.toBe(true);
+  });
+
+  it('promotes absolute preview image urls to permanent storage on confirm', async () => {
+    const auth = await register('promote-absolute-preview@example.com');
+
+    const preview = (
+      await request(app.getHttpServer())
+        .post('/import/file-preview')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .attach('file', Buffer.from(sampleRawText(), 'utf8'), {
+          filename: 'promote-absolute.txt',
+          contentType: 'text/plain',
+        })
+        .expect(200)
+    ).body as PreviewBody;
+
+    const draftImageBuffer = Buffer.from('promote-absolute-preview-image');
+    const draftImageHash = createHash('sha256')
+      .update(draftImageBuffer)
+      .digest('hex');
+    const draftImageFileName = `${draftImageHash}.png`;
+    const absoluteDraftImageUrl = `http://localhost:3000${IMPORTED_IMAGE_PREVIEW_ROUTE_PREFIX}/${preview.file.id}/${draftImageFileName}`;
+    const draftImagePath = join(
+      IMPORTED_IMAGE_PREVIEW_STORAGE_PATH,
+      preview.file.id,
+      draftImageFileName,
+    );
+    const expectedPermanentImageUrl = `${IMPORTED_IMAGE_ROUTE_PREFIX}/${draftImageHash.slice(0, 2)}/${draftImageFileName}`;
+    const expectedPermanentImagePath = join(
+      IMPORTED_IMAGE_STORAGE_PATH,
+      draftImageHash.slice(0, 2),
+      draftImageFileName,
+    );
+
+    await mkdir(join(IMPORTED_IMAGE_PREVIEW_STORAGE_PATH, preview.file.id), {
+      recursive: true,
+    });
+    await writeFile(draftImagePath, draftImageBuffer);
+
+    const confirm = (
+      await request(app.getHttpServer())
+        .post('/import/confirm')
+        .set('Authorization', `Bearer ${auth.accessToken}`)
+        .send({
+          title: 'Promoted absolute preview image test',
+          sourceFileId: preview.file.id,
+          questions: [
+            {
+              text: 'Choose the preview image',
+              imageUrls: [absoluteDraftImageUrl],
+              variants: [
+                {
+                  text: 'Correct answer',
+                  isCorrect: true,
+                },
+                {
+                  text: 'Wrong answer',
+                  isCorrect: false,
+                },
+              ],
+            },
+          ],
+        })
+        .expect(201)
+    ).body as ConfirmBody;
+
+    await request(app.getHttpServer())
+      .get(`/tests/${confirm.testId}`)
+      .set('Authorization', `Bearer ${auth.accessToken}`)
+      .expect(200)
+      .expect((response) => {
+        const body = response.body as {
+          questions: Array<{
+            imageUrls?: string[];
+          }>;
+        };
+
+        expect(body.questions[0].imageUrls).toEqual([expectedPermanentImageUrl]);
+      });
+
+    await expect(fileExists(draftImagePath)).resolves.toBe(false);
+    await expect(fileExists(expectedPermanentImagePath)).resolves.toBe(true);
   });
 
   it('preserves question and variant image urls through preview, import, and start', async () => {
@@ -539,6 +844,44 @@ describe('Backend MVP (e2e)', () => {
     ).toBe(true);
   });
 
+  it('rate limits repeated login attempts from the same client', async () => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({
+          email: 'missing-user@example.com',
+          password: 'strongPassword123',
+        })
+        .expect(401);
+    }
+
+    await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({
+        email: 'missing-user@example.com',
+        password: 'strongPassword123',
+      })
+      .expect(429)
+      .expect((response) => {
+        const body = response.body as { message?: string | string[] };
+        expect(response.headers['retry-after']).toBeDefined();
+        expect(String(body.message)).toContain(
+          'Too many authentication attempts',
+        );
+      });
+  });
+
+  it('blocks unsafe browser-originated cross-site POST requests', async () => {
+    await request(app.getHttpServer())
+      .post('/public/tests/00000000-0000-4000-8000-000000000001/start')
+      .set('Origin', 'http://evil.example')
+      .expect(403)
+      .expect((response) => {
+        const body = response.body as { message?: string };
+        expect(body.message).toBe('Cross-site unsafe requests are not allowed');
+      });
+  });
+
   async function register(email: string): Promise<AuthBody> {
     const response = await request(app.getHttpServer())
       .post('/auth/register')
@@ -559,6 +902,23 @@ describe('Backend MVP (e2e)', () => {
     await prisma.test.deleteMany();
     await prisma.uploadedFile.deleteMany();
     await prisma.user.deleteMany();
+    await cleanImportedImages();
+  }
+
+  async function cleanImportedImages(): Promise<void> {
+    await rm(IMPORTED_IMAGE_STORAGE_PATH, {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  async function fileExists(filePath: string): Promise<boolean> {
+    try {
+      await access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function sampleRawText(): string {

@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   UploadedFile,
   UseGuards,
@@ -78,5 +80,14 @@ export class ImportController {
   @ApiCreatedResponse({ description: 'Imported questions saved as a test.' })
   confirm(@CurrentUser() user: AuthUser, @Body() dto: ConfirmImportDto) {
     return this.importService.confirm(user.id, dto);
+  }
+
+  @Delete('file-preview/:sourceFileId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  discardPreview(
+    @CurrentUser() user: AuthUser,
+    @Param('sourceFileId') sourceFileId: string,
+  ) {
+    return this.importService.discardPreview(user.id, sourceFileId);
   }
 }

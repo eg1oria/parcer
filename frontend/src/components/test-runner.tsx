@@ -31,6 +31,10 @@ import {
 } from "@/lib/api";
 import { clearStoredSession, readStoredSession } from "@/lib/session";
 import { getSafeQuestionImageUrls } from "@/lib/images";
+import {
+  QUESTION_TRANSITION_DURATION_MS,
+  TEST_POINTS_PER_CORRECT_ANSWER,
+} from "@/lib/app-constants";
 import type {
   AnswerCheckResponse,
   FinishResponse,
@@ -50,8 +54,6 @@ const primaryButtonClass =
   "inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-stone-300 disabled:text-stone-600";
 const secondaryButtonClass =
   "inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-400";
-const POINTS_PER_CORRECT_ANSWER = 700;
-const QUESTION_TRANSITION_MS = 180;
 
 export function TestRunner({ testId }: { testId: string }) {
   const router = useRouter();
@@ -80,6 +82,9 @@ export function TestRunner({ testId }: { testId: string }) {
   const questionTransitionTimeoutRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
+  const isMountedRef = useRef(true);
+  const runStateVersionRef = useRef(0);
+  const leaderboardRequestRef = useRef(0);
 
   const clearAutoAdvance = useCallback(() => {
     if (autoAdvanceTimeoutRef.current) {
@@ -95,7 +100,14 @@ export function TestRunner({ testId }: { testId: string }) {
     }
   }, []);
 
+  const isActiveRunState = useCallback((runStateVersion: number) => {
+    return (
+      isMountedRef.current && runStateVersionRef.current === runStateVersion
+    );
+  }, []);
+
   const resetRunProgress = useCallback(() => {
+    runStateVersionRef.current += 1;
     clearAutoAdvance();
     clearQuestionTransition();
     autoAdvancedQuestionRef.current = null;
@@ -106,11 +118,27 @@ export function TestRunner({ testId }: { testId: string }) {
     setQuestionTransitionState("idle");
     setResult(null);
     setChecking(false);
+    return runStateVersionRef.current;
   }, [clearAutoAdvance, clearQuestionTransition]);
 
   const refreshLeaderboard = useCallback(async () => {
+    const leaderboardRequestId = leaderboardRequestRef.current + 1;
+    const runStateVersion = runStateVersionRef.current;
+
+    leaderboardRequestRef.current = leaderboardRequestId;
+
     try {
-      setLeaderboard(await getPublicLeaderboard(testId));
+      const nextLeaderboard = await getPublicLeaderboard(testId);
+
+      if (
+        !isMountedRef.current ||
+        leaderboardRequestRef.current !== leaderboardRequestId ||
+        runStateVersionRef.current !== runStateVersion
+      ) {
+        return;
+      }
+
+      setLeaderboard(nextLeaderboard);
     } catch {
       // Рейтинг не должен ломать прохождение теста.
     }
@@ -118,7 +146,7 @@ export function TestRunner({ testId }: { testId: string }) {
 
   const loadIntro = useCallback(
     async (nextToken: string | null) => {
-      resetRunProgress();
+      const runStateVersion = resetRunProgress();
       setMode(null);
       setToken(nextToken);
       setError(null);
@@ -126,16 +154,30 @@ export function TestRunner({ testId }: { testId: string }) {
 
       try {
         const publicSummary = await getPublicTestSummary(testId);
+
+        if (!isActiveRunState(runStateVersion)) {
+          return;
+        }
+
         setSummary(publicSummary);
         setLeaderboard(publicSummary.leaderboard);
+        setSplitQuestionsPerPart(
+          String(getDefaultSplitQuestionsPerPart(publicSummary.questionsCount)),
+        );
       } catch (loadError) {
+        if (!isActiveRunState(runStateVersion)) {
+          return;
+        }
+
         setSummary(null);
         setError(getReadableError(loadError));
       } finally {
-        setLoading(false);
+        if (isActiveRunState(runStateVersion)) {
+          setLoading(false);
+        }
       }
     },
-    [resetRunProgress, testId],
+    [isActiveRunState, resetRunProgress, testId],
   );
 
   const loadGuestIntro = useCallback(async () => {
@@ -149,7 +191,7 @@ export function TestRunner({ testId }: { testId: string }) {
         return;
       }
 
-      resetRunProgress();
+      const runStateVersion = resetRunProgress();
       setMode(nextMode);
       setError(null);
       setLoading(true);
@@ -160,10 +202,18 @@ export function TestRunner({ testId }: { testId: string }) {
             ? await startTest(token!, testId)
             : await startPublicTest(testId);
 
+        if (!isActiveRunState(runStateVersion)) {
+          return;
+        }
+
         setSummary(null);
         setTest(nextTest);
         void refreshLeaderboard();
       } catch (loadError) {
+        if (!isActiveRunState(runStateVersion)) {
+          return;
+        }
+
         if (nextMode === "authenticated" && loadError instanceof ApiError) {
           if (loadError.status === 401) {
             clearStoredSession();
@@ -180,10 +230,19 @@ export function TestRunner({ testId }: { testId: string }) {
         setMode(null);
         setError(getReadableError(loadError));
       } finally {
-        setLoading(false);
+        if (isActiveRunState(runStateVersion)) {
+          setLoading(false);
+        }
       }
     },
-    [loadGuestIntro, refreshLeaderboard, resetRunProgress, testId, token],
+    [
+      isActiveRunState,
+      loadGuestIntro,
+      refreshLeaderboard,
+      resetRunProgress,
+      testId,
+      token,
+    ],
   );
 
   const loadInitialState = useCallback(async () => {
@@ -196,14 +255,14 @@ export function TestRunner({ testId }: { testId: string }) {
   }, [loadInitialState]);
 
   useEffect(() => {
-    if (!summary) {
-      return;
-    }
+    isMountedRef.current = true;
 
-    setSplitQuestionsPerPart(
-      String(getDefaultSplitQuestionsPerPart(summary.questionsCount)),
-    );
-  }, [summary]);
+    return () => {
+      isMountedRef.current = false;
+      clearAutoAdvance();
+      clearQuestionTransition();
+    };
+  }, [clearAutoAdvance, clearQuestionTransition]);
 
   const handleSaveCopy = useCallback(async () => {
     if (!token || savingCopy) {
@@ -217,6 +276,10 @@ export function TestRunner({ testId }: { testId: string }) {
       const savedTest = await savePublicTest(token, testId);
       router.push(`/tests/${savedTest.testId}`);
     } catch (saveError) {
+      if (!isMountedRef.current) {
+        return;
+      }
+
       if (saveError instanceof ApiError && saveError.status === 401) {
         clearStoredSession();
         await loadGuestIntro();
@@ -225,7 +288,9 @@ export function TestRunner({ testId }: { testId: string }) {
 
       setError(getReadableError(saveError));
     } finally {
-      setSavingCopy(false);
+      if (isMountedRef.current) {
+        setSavingCopy(false);
+      }
     }
   }, [loadGuestIntro, router, savingCopy, testId, token]);
 
@@ -258,6 +323,10 @@ export function TestRunner({ testId }: { testId: string }) {
       });
       router.push("/tests");
     } catch (splitError) {
+      if (!isMountedRef.current) {
+        return;
+      }
+
       if (splitError instanceof ApiError && splitError.status === 401) {
         clearStoredSession();
         await loadGuestIntro();
@@ -266,7 +335,9 @@ export function TestRunner({ testId }: { testId: string }) {
 
       setError(getReadableError(splitError));
     } finally {
-      setSplittingTest(false);
+      if (isMountedRef.current) {
+        setSplittingTest(false);
+      }
     }
   }, [
     loadGuestIntro,
@@ -300,8 +371,10 @@ export function TestRunner({ testId }: { testId: string }) {
       ).length,
     [feedback],
   );
-  const currentPoints = correctAnswersCount * POINTS_PER_CORRECT_ANSWER;
-  const maxPoints = (test?.questions.length ?? 0) * POINTS_PER_CORRECT_ANSWER;
+  const currentPoints =
+    correctAnswersCount * TEST_POINTS_PER_CORRECT_ANSWER;
+  const maxPoints =
+    (test?.questions.length ?? 0) * TEST_POINTS_PER_CORRECT_ANSWER;
   const questionTransitionClass =
     questionTransitionState === "idle"
       ? "translate-y-0 scale-100 opacity-100"
@@ -334,7 +407,7 @@ export function TestRunner({ testId }: { testId: string }) {
           questionTransitionTimeoutRef.current = null;
           setQuestionTransitionState("idle");
         }, 20);
-      }, QUESTION_TRANSITION_MS);
+      }, QUESTION_TRANSITION_DURATION_MS);
     },
     [clearQuestionTransition, currentIndex, questionTransitionState, test],
   );
@@ -353,6 +426,7 @@ export function TestRunner({ testId }: { testId: string }) {
     }
 
     const questionId = currentQuestion.id;
+    const runStateVersion = runStateVersionRef.current;
 
     setAnswers((current) => ({
       ...current,
@@ -373,11 +447,19 @@ export function TestRunner({ testId }: { testId: string }) {
               variantId,
             });
 
+      if (!isActiveRunState(runStateVersion)) {
+        return;
+      }
+
       setFeedback((current) => ({
         ...current,
         [questionId]: answerFeedback,
       }));
     } catch (checkError) {
+      if (!isActiveRunState(runStateVersion)) {
+        return;
+      }
+
       if (
         mode === "authenticated" &&
         checkError instanceof ApiError &&
@@ -399,7 +481,9 @@ export function TestRunner({ testId }: { testId: string }) {
       });
       setError(getReadableError(checkError));
     } finally {
-      setChecking(false);
+      if (isActiveRunState(runStateVersion)) {
+        setChecking(false);
+      }
     }
   }
 
@@ -412,6 +496,8 @@ export function TestRunner({ testId }: { testId: string }) {
     ) {
       return;
     }
+
+    const runStateVersion = runStateVersionRef.current;
 
     setError(null);
 
@@ -430,9 +516,17 @@ export function TestRunner({ testId }: { testId: string }) {
               answers: finishAnswers,
             });
 
+      if (!isActiveRunState(runStateVersion)) {
+        return;
+      }
+
       setResult(finishResult);
       await refreshLeaderboard();
     } catch (finishError) {
+      if (!isActiveRunState(runStateVersion)) {
+        return;
+      }
+
       if (
         mode === "authenticated" &&
         finishError instanceof ApiError &&
@@ -445,11 +539,14 @@ export function TestRunner({ testId }: { testId: string }) {
 
       setError(getReadableError(finishError));
     } finally {
-      setChecking(false);
+      if (isActiveRunState(runStateVersion)) {
+        setChecking(false);
+      }
     }
   }, [
     answeredAll,
     answers,
+    isActiveRunState,
     loadGuestIntro,
     mode,
     nickname,
@@ -457,6 +554,17 @@ export function TestRunner({ testId }: { testId: string }) {
     test,
     token,
   ]);
+
+  const triggerFinish = useCallback(() => {
+    handleFinish().catch((finishError) => {
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      setChecking(false);
+      setError(getReadableError(finishError));
+    });
+  }, [handleFinish]);
 
   useEffect(() => {
     if (!test || !currentQuestion || !currentFeedback || result) {
@@ -476,7 +584,7 @@ export function TestRunner({ testId }: { testId: string }) {
         return;
       }
 
-      void handleFinish();
+      triggerFinish();
     }, 2000);
 
     return clearAutoAdvance;
@@ -485,10 +593,10 @@ export function TestRunner({ testId }: { testId: string }) {
     currentFeedback,
     currentIndex,
     currentQuestion,
-    handleFinish,
     result,
     test,
     transitionToQuestion,
+    triggerFinish,
   ]);
 
   async function handleNicknameSubmit(event: FormEvent<HTMLFormElement>) {
@@ -606,7 +714,9 @@ export function TestRunner({ testId }: { testId: string }) {
             <div className="grid gap-3 sm:grid-cols-4">
               <ResultMetric
                 label="Очки"
-                value={formatPoints(result.score * POINTS_PER_CORRECT_ANSWER)}
+                value={formatPoints(
+                  result.score * TEST_POINTS_PER_CORRECT_ANSWER,
+                )}
               />
               <ResultMetric label="Верно" value={result.score} />
               <ResultMetric label="Всего" value={result.total} />
@@ -690,7 +800,7 @@ export function TestRunner({ testId }: { testId: string }) {
       {showCorrectReward ? (
         <CorrectAnswerReward
           key={currentQuestion.id}
-          points={POINTS_PER_CORRECT_ANSWER}
+          points={TEST_POINTS_PER_CORRECT_ANSWER}
         />
       ) : null}
     </main>
@@ -1276,10 +1386,16 @@ function formatPoints(value: number): string {
 }
 
 function formatDate(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Дата недоступна";
+  }
+
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "short",
     timeStyle: "short",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 function getReadableError(error: unknown): string {
