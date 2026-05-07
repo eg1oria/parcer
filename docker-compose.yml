@@ -71,6 +71,7 @@ services:
       provenance: false
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+        NEXT_PUBLIC_MEDIA_BASE_URL: ${NEXT_PUBLIC_MEDIA_BASE_URL:-}
     expose:
       - '3000'
     ports:
@@ -80,6 +81,7 @@ services:
         condition: service_healthy
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+      NEXT_PUBLIC_MEDIA_BASE_URL: ${NEXT_PUBLIC_MEDIA_BASE_URL:-}
     networks:
       - app
     healthcheck:
