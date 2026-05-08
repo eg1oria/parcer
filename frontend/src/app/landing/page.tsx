@@ -2,85 +2,168 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarDays,
+  CheckCircle2,
+  ChefHat,
+  Clock3,
+  Globe2,
+  LayoutPanelTop,
+  MapPinned,
+  MessageCircle,
+  Phone,
+  Search,
+  Smartphone,
+  Sparkles,
+  Star,
+} from "lucide-react";
+
+import styles from "./page.module.css";
 
 const PHONE_NUMBER = "+77054424389";
 const PHONE_DISPLAY = "+7 705 442 43 89";
+const PHONE_LINK = `tel:${PHONE_NUMBER}`;
 const WHATSAPP_LINK = "https://wa.me/77054424389";
 
-const FontLink = () => (
+const GlobalStyles = () => (
   <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500&display=swap');
-
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-
-    :root {
-      --gold: #c9a96e;
-      --gold-light: #e8d5a3;
-      --dark: #0d0b09;
-      --dark-2: #181410;
-      --dark-3: #221e18;
-      --cream: #f2ece0;
-      --text: #cec8bc;
-      --text-dim: #7a7060;
-    }
+    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;700&display=swap');
 
     html { scroll-behavior: smooth; }
-
-    body {
-      background: var(--dark);
-      font-family: 'DM Sans', sans-serif;
-      font-weight: 300;
-      overflow-x: hidden;
-      color: var(--text);
-    }
-
-    body::after {
-      content: '';
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      z-index: 9999;
-      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
-      opacity: 0.5;
-    }
-
-    @keyframes spinSlow { to { transform: translate(-50%, -50%) rotate(360deg); } }
-    @keyframes spinRev  { to { transform: translate(-50%, -50%) rotate(-360deg); } }
-    @keyframes shimmer  { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
-
-    .hero-ring-1 {
-      position: absolute;
-      border-radius: 50%;
-      width: 720px;
-      height: 720px;
-      top: 50%;
-      left: 50%;
-      border: 1px solid rgba(201, 169, 110, 0.07);
-      transform: translate(-50%, -50%);
-      animation: spinSlow 50s linear infinite;
-    }
-
-    .hero-ring-2 {
-      position: absolute;
-      border-radius: 50%;
-      width: 480px;
-      height: 480px;
-      top: 50%;
-      left: 50%;
-      border: 1px solid rgba(201, 169, 110, 0.05);
-      transform: translate(-50%, -50%);
-      animation: spinRev 30s linear infinite;
-    }
+    body { background: #090807; }
   `}</style>
 );
+
+type IconItem = {
+  icon: LucideIcon;
+  title: string;
+  desc: string;
+};
+
+const heroStats = [
+  { value: "5-7 дней", label: "до первого готового запуска" },
+  { value: "24/7", label: "приём заявок и броней без пауз" },
+  { value: "3 касания", label: "до WhatsApp, меню и звонка" },
+];
+
+const ribbonItems = [
+  "Атмосфера",
+  "Меню",
+  "Бронь",
+  "WhatsApp",
+  "Карты",
+  "SEO",
+  "Мобильная версия",
+  "Первый экран",
+];
+
+const problemItems: IconItem[] = [
+  {
+    icon: Search,
+    title: "Решение принимают в поиске",
+    desc: "Гость открывает несколько заведений подряд. Побеждает не тот, кто ближе, а тот, кто выглядит убедительнее с первых секунд.",
+  },
+  {
+    icon: Smartphone,
+    title: "Телефон стал вашей витриной",
+    desc: "Если страница неудобная, тёмная или пустая, человек закрывает её раньше, чем дойдёт до адреса и меню.",
+  },
+  {
+    icon: MapPinned,
+    title: "Нужен маршрут до действия",
+    desc: "Сайт должен вести к брони, звонку или WhatsApp без лишних шагов. Иначе интерес просто рассеивается.",
+  },
+];
+
+const problemStats = [
+  { value: "87%", label: "сначала смотрят заведение онлайн, а уже потом решают ехать" },
+  { value: "7 сек", label: "хватает на первое впечатление о месте и доверии к нему" },
+  { value: "3x", label: "больше шансов на заявку, когда подача ведёт к действию" },
+];
+
+const offerItems: Array<IconItem & { n: string }> = [
+  {
+    n: "01",
+    icon: Sparkles,
+    title: "Атмосфера в первом экране",
+    desc: "Сразу показываем характер вашего места: настроение, свет, посадку, акцент на концепции.",
+  },
+  {
+    n: "02",
+    icon: ChefHat,
+    title: "Меню и спецпредложения",
+    desc: "Подаём блюда, сеты и акции так, чтобы человек захотел написать ещё до визита.",
+  },
+  {
+    n: "03",
+    icon: CalendarDays,
+    title: "Бронь в одно касание",
+    desc: "Кнопки звонка и WhatsApp на виду, чтобы запросы не терялись и не ждали администратора.",
+  },
+  {
+    n: "04",
+    icon: Globe2,
+    title: "SEO, карты и гео-присутствие",
+    desc: "Подсвечиваем ваше место в поиске и связываем сайт с картами, чтобы вас проще находили рядом.",
+  },
+  {
+    n: "05",
+    icon: Clock3,
+    title: "Запуск без затяжек",
+    desc: "Собираем сильный лендинг быстро: без месяцев переписок, с понятным сценарием и приоритетами.",
+  },
+  {
+    n: "06",
+    icon: Smartphone,
+    title: "Мобильная версия как основная",
+    desc: "Всё строится под экран телефона, потому что именно там чаще всего и принимается решение.",
+  },
+];
+
+const processSteps: IconItem[] = [
+  {
+    icon: MessageCircle,
+    title: "Созваниваемся на 15 минут",
+    desc: "Уточняем формат заведения, аудиторию, средний чек, подачу и какой результат нужен сайту.",
+  },
+  {
+    icon: LayoutPanelTop,
+    title: "Собираем подачу и тексты",
+    desc: "Выстраиваем структуру, визуальный ритм, УТП, сценарий брони и правильные акценты на экране.",
+  },
+  {
+    icon: CheckCircle2,
+    title: "Запускаем и подключаем заявки",
+    desc: "Доводим страницу до рабочего состояния: кнопки, карты, мессенджеры, аналитика и финальные правки.",
+  },
+];
+
+const projectIncludes = [
+  "Фото и атмосфера, которые продают настроение",
+  "Структура, ведущая к брони, звонку или сообщению",
+  "Быстрые кнопки WhatsApp и телефона без лишнего пути",
+  "Карты, SEO-основа и ясные точки доверия",
+];
+
+const contactPromises = [
+  "Покажу референсы и визуальное направление",
+  "Сориентирую по срокам и стоимости",
+  "Подскажу, как лучше подать именно ваше место",
+];
+
+function classNames(...values: Array<string | false | undefined>) {
+  return values.filter(Boolean).join(" ");
+}
 
 function useReveal() {
   const ref = useRef<HTMLDivElement | null>(null);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+    const element = ref.current;
+    if (!element) return;
 
     const observer = new IntersectionObserver(
       ([entry]) => {
@@ -89,10 +172,11 @@ function useReveal() {
           observer.disconnect();
         }
       },
-      { threshold: 0.12, rootMargin: "0px 0px -40px 0px" }
+      { threshold: 0.16, rootMargin: "0px 0px -64px 0px" }
     );
 
-    observer.observe(el);
+    observer.observe(element);
+
     return () => observer.disconnect();
   }, []);
 
@@ -102,21 +186,18 @@ function useReveal() {
 type RevealProps = {
   children: ReactNode;
   delay?: number;
+  className?: string;
   style?: CSSProperties;
 };
 
-function Reveal({ children, delay = 0, style = {} }: RevealProps) {
+function Reveal({ children, delay = 0, className, style }: RevealProps) {
   const [ref, visible] = useReveal();
 
   return (
     <div
       ref={ref}
-      style={{
-        opacity: visible ? 1 : 0,
-        transform: visible ? "none" : "translateY(28px)",
-        transition: `opacity 0.8s ease ${delay}s, transform 0.8s ease ${delay}s`,
-        ...style,
-      }}
+      className={classNames(styles.reveal, visible && styles.revealVisible, className)}
+      style={{ transitionDelay: `${delay}s`, ...style }}
     >
       {children}
     </div>
@@ -125,122 +206,37 @@ function Reveal({ children, delay = 0, style = {} }: RevealProps) {
 
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 16,
-        fontSize: 10,
-        letterSpacing: "0.4em",
-        textTransform: "uppercase",
-        color: "var(--gold)",
-        marginBottom: 48,
-      }}
-    >
-      {children}
-      <span
-        style={{
-          flex: 1,
-          height: 1,
-          background: "linear-gradient(90deg, rgba(201,169,110,0.3), transparent)",
-        }}
-      />
+    <div className={styles.sectionLabel}>
+      <Sparkles size={14} strokeWidth={1.8} />
+      <span>{children}</span>
     </div>
   );
 }
 
-const offerItems = [
-  {
-    n: "01",
-    title: "Атмосфера с первого экрана",
-    desc: "Дизайн, который передаёт характер вашего места. Гость ещё не пришёл, но уже влюбился.",
-  },
-  {
-    n: "02",
-    title: "Меню и спецпредложения",
-    desc: "Красивая подача блюд, акций и сетов. Человек смотрит и уже хочет есть.",
-  },
-  {
-    n: "03",
-    title: "Онлайн-бронирование",
-    desc: "Кнопка «Забронировать стол» работает круглосуточно. Ни одна заявка не потеряется.",
-  },
-  {
-    n: "04",
-    title: "SEO и карты",
-    desc: "Ваш сайт будут находить в поиске. Google, Яндекс, 2ГИС — вы везде.",
-  },
-  {
-    n: "05",
-    title: "Быстрый запуск",
-    desc: "Готовый лендинг за 5–7 дней. Без долгих согласований, сразу в дело.",
-  },
-  {
-    n: "06",
-    title: "Адаптация под телефон",
-    desc: "Идеально выглядит на любом устройстве. Ваш сайт как часть интерьера: всё на месте.",
-  },
-];
+type ActionButtonProps = {
+  href: string;
+  children: ReactNode;
+  secondary?: boolean;
+  compact?: boolean;
+};
 
-type OfferItem = (typeof offerItems)[number];
-
-function OfferCard({ item, delay }: { item: OfferItem; delay: number }) {
-  const [hovered, setHovered] = useState(false);
+function ActionButton({ href, children, secondary = false, compact = false }: ActionButtonProps) {
+  const isExternal = href.startsWith("http");
 
   return (
-    <Reveal delay={delay}>
-      <div
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{
-          background: hovered ? "var(--dark-3)" : "var(--dark)",
-          padding: "44px 36px",
-          position: "relative",
-          overflow: "hidden",
-          transition: "background 0.3s ease",
-          cursor: "default",
-        }}
-      >
-        <span
-          style={{
-            position: "absolute",
-            bottom: 0,
-            left: 0,
-            height: 1,
-            background: "var(--gold)",
-            width: hovered ? "100%" : "0%",
-            transition: "width 0.4s ease",
-            display: "block",
-          }}
-        />
-        <div
-          style={{
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: 64,
-            fontWeight: 300,
-            lineHeight: 1,
-            color: hovered ? "rgba(201,169,110,0.25)" : "rgba(201,169,110,0.1)",
-            marginBottom: 20,
-            transition: "color 0.3s ease",
-            userSelect: "none",
-          }}
-        >
-          {item.n}
-        </div>
-        <h3
-          style={{
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: 22,
-            fontWeight: 400,
-            color: "var(--cream)",
-            marginBottom: 14,
-          }}
-        >
-          {item.title}
-        </h3>
-        <p style={{ fontSize: 13, lineHeight: 1.85, color: "var(--text-dim)" }}>{item.desc}</p>
-      </div>
-    </Reveal>
+    <a
+      href={href}
+      className={classNames(
+        styles.button,
+        secondary ? styles.buttonSecondary : styles.buttonPrimary,
+        compact && styles.buttonCompact
+      )}
+      rel={isExternal ? "noreferrer" : undefined}
+      target={isExternal ? "_blank" : undefined}
+    >
+      <span>{children}</span>
+      <ArrowRight size={18} strokeWidth={1.8} />
+    </a>
   );
 }
 
@@ -248,481 +244,435 @@ export default function App() {
   const [heroIn, setHeroIn] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(() => setHeroIn(true), 100);
-    return () => clearTimeout(timer);
+    const timer = window.setTimeout(() => setHeroIn(true), 80);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const heroAnim = (delay: number): CSSProperties => ({
     opacity: heroIn ? 1 : 0,
-    transform: heroIn ? "none" : "translateY(30px)",
-    transition: `opacity 1s ease ${delay}s, transform 1s ease ${delay}s`,
+    transform: heroIn ? "translate3d(0, 0, 0)" : "translate3d(0, 28px, 0)",
+    transition:
+      `opacity 0.9s cubic-bezier(0.22, 1, 0.36, 1) ${delay}s, ` +
+      `transform 0.9s cubic-bezier(0.22, 1, 0.36, 1) ${delay}s`,
   });
 
   return (
     <>
-      <FontLink />
+      <GlobalStyles />
 
-      <section
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
-          padding: "80px 20px",
-          overflow: "hidden",
-          background: "linear-gradient(180deg, var(--dark) 0%, var(--dark-2) 100%)",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
-            background:
-              "radial-gradient(ellipse 80% 55% at 50% 0%, rgba(201,169,110,0.11) 0%, transparent 70%)",
-          }}
-        />
+      <div className={styles.page}>
+        <div className={styles.shell}>
+          <header className={styles.header}>
+            <a href="#top" className={styles.brand}>
+              <span className={styles.brandEyebrow}>Web Studio</span>
+              <span className={styles.brandTitle}>Лендинги для заведений</span>
+            </a>
 
-        <div className="hero-ring-1" />
-        <div className="hero-ring-2" />
+            <nav className={styles.nav}>
+              <a href="#problem" className={styles.navLink}>
+                Почему
+              </a>
+              <a href="#offer" className={styles.navLink}>
+                Что внутри
+              </a>
+              <a href="#process" className={styles.navLink}>
+                Процесс
+              </a>
+              <a href="#contact" className={styles.navLink}>
+                Контакт
+              </a>
+            </nav>
 
-        <p
-          style={{
-            ...heroAnim(0.3),
-            position: "relative",
-            zIndex: 2,
-            fontSize: 11,
-            letterSpacing: "0.35em",
-            textTransform: "uppercase",
-            color: "var(--gold)",
-            marginBottom: 40,
-          }}
-        >
-          <span style={{ margin: "0 10px", opacity: 0.5 }}>-</span>
-          Специальное предложение для заведений
-          <span style={{ margin: "0 10px", opacity: 0.5 }}>-</span>
-        </p>
+            <div className={styles.headerActions}>
+              <a href={PHONE_LINK} className={styles.headerPhone}>
+                <Phone size={16} strokeWidth={1.8} />
+                <span>{PHONE_DISPLAY}</span>
+              </a>
+              <ActionButton href={WHATSAPP_LINK} compact>
+                WhatsApp
+              </ActionButton>
+            </div>
+          </header>
 
-        <h1
-          style={{
-            ...heroAnim(0.55),
-            position: "relative",
-            zIndex: 2,
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: "clamp(52px, 10vw, 118px)",
-            fontWeight: 300,
-            lineHeight: 0.92,
-            textAlign: "center",
-            color: "var(--cream)",
-          }}
-        >
-          Ваше место —
-          <br />
-          <em style={{ fontStyle: "italic", color: "var(--gold)" }}>в каждом телефоне</em>
-        </h1>
+          <main>
+            <section id="top" className={styles.hero}>
+              <div className={styles.heroGrid}>
+                <div className={styles.heroCopy}>
+                  <div className={styles.heroBadge} style={heroAnim(0.08)}>
+                    <Sparkles size={14} strokeWidth={1.8} />
+                    <span>Спецпредложение для кафе, ресторанов и lounge-пространств</span>
+                  </div>
 
-        <p
-          style={{
-            ...heroAnim(0.8),
-            position: "relative",
-            zIndex: 2,
-            fontFamily: "'Cormorant Garamond', serif",
-            fontSize: "clamp(18px, 3vw, 26px)",
-            fontWeight: 300,
-            fontStyle: "italic",
-            color: "var(--text-dim)",
-            marginTop: 28,
-            textAlign: "center",
-          }}
-        >
-          Лендинг, который превращает случайных гостей в постоянных
-        </p>
+                  <h1 className={styles.heroTitle} style={heroAnim(0.16)}>
+                    Ваше место должно
+                    <br />
+                    <em>выглядеть желанным в каждом телефоне</em>
+                  </h1>
 
-        <div
-          style={{
-            ...heroAnim(1.1),
-            position: "relative",
-            zIndex: 2,
-            width: 1,
-            height: 70,
-            margin: "48px auto",
-            background: "linear-gradient(180deg, transparent, var(--gold), transparent)",
-            animation: "shimmer 3s ease 1.5s infinite",
-          }}
-        />
+                  <p className={styles.heroLead} style={heroAnim(0.24)}>
+                    Создаю лендинги, которые передают атмосферу, показывают меню,
+                    ведут к брони и превращают случайный интерес в реальные сообщения.
+                  </p>
 
-        <div
-          style={{
-            ...heroAnim(1.3),
-            position: "relative",
-            zIndex: 2,
-            display: "flex",
-            gap: 18,
-            flexWrap: "wrap",
-            justifyContent: "center",
-          }}
-        >
-          <BtnPrimary href="#offer">Хочу такой сайт</BtnPrimary>
-          <BtnSecondary href="#problem">Узнать подробнее</BtnSecondary>
-        </div>
-      </section>
+                  <div className={styles.heroActions} style={heroAnim(0.32)}>
+                    <ActionButton href={WHATSAPP_LINK}>Обсудить в WhatsApp</ActionButton>
+                    <ActionButton href="#offer" secondary>
+                      Посмотреть состав лендинга
+                    </ActionButton>
+                  </div>
 
-      <section
-        id="problem"
-        style={{
-          padding: "100px 20px",
-          background: "var(--dark-2)",
-          position: "relative",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 1,
-            background: "linear-gradient(90deg, transparent, var(--gold), transparent)",
-          }}
-        />
-
-        <div style={{ maxWidth: 900, margin: "0 auto" }}>
-          <Reveal>
-            <SectionLabel>Реальность рынка</SectionLabel>
-          </Reveal>
-
-          <Reveal delay={0.1}>
-            <h2
-              style={{
-                fontFamily: "'Cormorant Garamond', serif",
-                fontSize: "clamp(32px, 5vw, 56px)",
-                fontWeight: 300,
-                lineHeight: 1.15,
-                color: "var(--cream)",
-                marginBottom: 36,
-              }}
-            >
-              Гость гуглит —
-              <br />
-              <em style={{ fontStyle: "italic", color: "var(--gold)" }}>и уходит к конкурентам</em>
-            </h2>
-          </Reveal>
-
-          <Reveal delay={0.2}>
-            <p style={{ fontSize: 15, lineHeight: 1.95, color: "var(--text-dim)", maxWidth: 680 }}>
-              Сегодня человек принимает решение, куда пойти, за 7 секунд. Он открывает телефон,
-              вводит «кафе рядом» и видит того, кто позаботился о своём присутствии в сети. Если
-              вашего сайта нет или он выглядит устаревшим, этого человека вы уже потеряли. Он
-              пошёл туда, где красиво, понятно и убедительно.
-            </p>
-          </Reveal>
-
-          <Reveal delay={0.3}>
-            <div style={{ display: "flex", gap: 48, marginTop: 64, flexWrap: "wrap" }}>
-              {[
-                { num: "87%", label: "гостей изучают заведение\nонлайн перед визитом" },
-                { num: "3x", label: "больше броней приносит\nхороший лендинг" },
-                { num: "7 сек", label: "на первое впечатление —\nпотом уже поздно" },
-              ].map((stat) => (
-                <div
-                  key={stat.num}
-                  style={{
-                    flex: "1 1 160px",
-                    minWidth: 160,
-                    borderLeft: "1px solid rgba(201,169,110,0.2)",
-                    paddingLeft: 24,
-                  }}
-                >
-                  <span
-                    style={{
-                      fontFamily: "'Cormorant Garamond', serif",
-                      fontSize: 54,
-                      fontWeight: 300,
-                      color: "var(--gold)",
-                      lineHeight: 1,
-                      display: "block",
-                    }}
-                  >
-                    {stat.num}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: 12,
-                      letterSpacing: "0.08em",
-                      color: "var(--text-dim)",
-                      marginTop: 8,
-                      lineHeight: 1.6,
-                      display: "block",
-                      whiteSpace: "pre-line",
-                    }}
-                  >
-                    {stat.label}
-                  </span>
+                  <div className={styles.heroStats} style={heroAnim(0.4)}>
+                    {heroStats.map((stat) => (
+                      <div key={stat.value} className={styles.heroStatCard}>
+                        <span className={styles.heroStatValue}>{stat.value}</span>
+                        <span className={styles.heroStatLabel}>{stat.label}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))}
-            </div>
-          </Reveal>
+
+                <div className={styles.heroVisual} style={heroAnim(0.18)}>
+                  <div className={styles.visualHalo} aria-hidden="true" />
+                  <div className={styles.visualRing} aria-hidden="true" />
+
+                  <div className={styles.phoneMockup}>
+                    <div className={styles.phoneTopBar}>
+                      <span>18:24</span>
+                      <div className={styles.phoneSignal}>
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    </div>
+
+                    <div className={styles.phoneScreen}>
+                      <div className={styles.phoneSearch}>
+                        <Search size={14} strokeWidth={1.9} />
+                        <span>ресторан рядом с атмосферой</span>
+                      </div>
+
+                      <div className={styles.phoneHeroCard}>
+                        <span className={styles.phoneTag}>Лендинг • Бронь • Меню</span>
+                        <strong>Ваше заведение выглядит как лучший выбор рядом.</strong>
+                        <p>Один экран показывает вкус, настроение и кнопку действия.</p>
+                      </div>
+
+                      <div className={styles.phoneInfoGrid}>
+                        <div className={styles.phoneInfoCard}>
+                          <div className={styles.phoneInfoTop}>
+                            <CalendarDays size={16} strokeWidth={1.8} />
+                            <span>Бронь</span>
+                          </div>
+                          <p>Забронировать стол за 30 секунд</p>
+                        </div>
+
+                        <div className={styles.phoneInfoCard}>
+                          <div className={styles.phoneInfoTop}>
+                            <ChefHat size={16} strokeWidth={1.8} />
+                            <span>Меню</span>
+                          </div>
+                          <p>Сеты, подача и позиции дня на виду</p>
+                        </div>
+
+                        <div className={classNames(styles.phoneInfoCard, styles.phoneInfoCardWide)}>
+                          <div className={styles.phoneInfoTop}>
+                            <MapPinned size={16} strokeWidth={1.8} />
+                            <span>Карты и отзывы</span>
+                          </div>
+                          <p>Показываем адрес, ориентиры и точки доверия рядом с действием</p>
+                        </div>
+                      </div>
+
+                      <a
+                        href={WHATSAPP_LINK}
+                        className={styles.phoneCta}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <span>Открыть WhatsApp</span>
+                        <ArrowRight size={16} strokeWidth={1.8} />
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className={classNames(styles.floatCard, styles.floatCardTop)}>
+                    <div className={styles.floatCardTitle}>
+                      <Star size={16} strokeWidth={1.8} />
+                      <span>Первое впечатление</span>
+                    </div>
+                    <p className={styles.floatCardText}>Визуал должен продавать ещё до текста.</p>
+                  </div>
+
+                  <div className={classNames(styles.floatCard, styles.floatCardRight)}>
+                    <div className={styles.floatCardTitle}>
+                      <Clock3 size={16} strokeWidth={1.8} />
+                      <span>Быстрый отклик</span>
+                    </div>
+                    <p className={styles.floatCardText}>Кнопки связи всегда рядом с интересом.</p>
+                  </div>
+
+                  <div className={classNames(styles.floatCard, styles.floatCardBottom)}>
+                    <div className={styles.floatCardTitle}>
+                      <LayoutPanelTop size={16} strokeWidth={1.8} />
+                      <span>Структура без хаоса</span>
+                    </div>
+                    <p className={styles.floatCardText}>Фото, меню, доверие и бронь в правильном ритме.</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className={styles.ribbon} aria-label="Преимущества лендинга">
+              <div className={styles.ribbonTrack}>
+                {[...ribbonItems, ...ribbonItems].map((item, index) => (
+                  <span key={`${item}-${index}`} className={styles.ribbonItem}>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </section>
+
+            <section id="problem" className={styles.section}>
+              <div className={styles.sectionIntro}>
+                <Reveal>
+                  <SectionLabel>Почему обычная страница не работает</SectionLabel>
+                </Reveal>
+
+                <Reveal delay={0.08}>
+                  <h2 className={styles.sectionTitle}>
+                    Гость выбирает не между адресами.
+                    <br />
+                    Он выбирает между ощущениями.
+                  </h2>
+                </Reveal>
+
+                <Reveal delay={0.16}>
+                  <p className={styles.sectionLead}>
+                    Сегодня заведение оценивают по экрану телефона: насколько там красиво,
+                    понятно и легко сделать следующий шаг. Если сайт не цепляет, человек
+                    просто уходит к тем, кто выглядит живее и увереннее.
+                  </p>
+                </Reveal>
+              </div>
+
+              <div className={styles.problemGrid}>
+                {problemItems.map((item, index) => {
+                  const Icon = item.icon;
+
+                  return (
+                    <Reveal key={item.title} delay={0.08 * index}>
+                      <article className={styles.problemCard}>
+                        <div className={styles.iconBadge}>
+                          <Icon size={20} strokeWidth={1.8} />
+                        </div>
+                        <h3 className={styles.cardTitle}>{item.title}</h3>
+                        <p className={styles.cardText}>{item.desc}</p>
+                      </article>
+                    </Reveal>
+                  );
+                })}
+              </div>
+
+              <div className={styles.numbersRow}>
+                {problemStats.map((stat, index) => (
+                  <Reveal key={stat.value} delay={0.12 + index * 0.08}>
+                    <article className={styles.numberCard}>
+                      <span className={styles.numberValue}>{stat.value}</span>
+                      <p className={styles.numberLabel}>{stat.label}</p>
+                    </article>
+                  </Reveal>
+                ))}
+              </div>
+            </section>
+
+            <section id="offer" className={styles.section}>
+              <div className={styles.sectionIntro}>
+                <Reveal>
+                  <SectionLabel>Что получает ваше заведение</SectionLabel>
+                </Reveal>
+
+                <Reveal delay={0.08}>
+                  <h2 className={styles.sectionTitle}>
+                    Не просто красивую страницу,
+                    <br />
+                    а рабочий сценарий продаж 24/7.
+                  </h2>
+                </Reveal>
+              </div>
+
+              <div className={styles.offerGrid}>
+                {offerItems.map((item, index) => {
+                  const Icon = item.icon;
+
+                  return (
+                    <Reveal key={item.n} delay={(index % 3) * 0.08}>
+                      <article className={styles.offerCard}>
+                        <div className={styles.offerCardTop}>
+                          <span className={styles.offerIndex}>{item.n}</span>
+                          <div className={styles.iconBadge}>
+                            <Icon size={20} strokeWidth={1.8} />
+                          </div>
+                        </div>
+                        <h3 className={styles.offerTitle}>{item.title}</h3>
+                        <p className={styles.offerText}>{item.desc}</p>
+                      </article>
+                    </Reveal>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section id="process" className={styles.section}>
+              <div className={styles.sectionIntro}>
+                <Reveal>
+                  <SectionLabel>Как идём к запуску</SectionLabel>
+                </Reveal>
+
+                <Reveal delay={0.08}>
+                  <h2 className={styles.sectionTitle}>
+                    Короткий процесс, в котором
+                    <br />
+                    есть темп, логика и результат.
+                  </h2>
+                </Reveal>
+              </div>
+
+              <div className={styles.processGrid}>
+                {processSteps.map((step, index) => {
+                  const Icon = step.icon;
+
+                  return (
+                    <Reveal key={step.title} delay={index * 0.1}>
+                      <article className={styles.processCard}>
+                        <span className={styles.processStep}>0{index + 1}</span>
+                        <div className={styles.iconBadge}>
+                          <Icon size={20} strokeWidth={1.8} />
+                        </div>
+                        <h3 className={styles.processTitle}>{step.title}</h3>
+                        <p className={styles.processText}>{step.desc}</p>
+                      </article>
+                    </Reveal>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className={styles.quoteSection}>
+              <Reveal className={styles.quotePanel}>
+                <span className={styles.quoteKicker}>Что должно чувствоваться на странице</span>
+
+                <p className={styles.quoteText}>
+                  Хороший лендинг для заведения
+                  <br />
+                  не просто рассказывает.
+                  <br />
+                  Он <span className={styles.quoteAccent}>сразу вызывает желание прийти</span>.
+                </p>
+
+                <div className={styles.quoteChips}>
+                  <span className={styles.quoteChip}>Атмосфера</span>
+                  <span className={styles.quoteChip}>Доверие</span>
+                  <span className={styles.quoteChip}>Бронь</span>
+                  <span className={styles.quoteChip}>Гео-поиск</span>
+                </div>
+
+                <div className={styles.checklist}>
+                  {projectIncludes.map((item) => (
+                    <div key={item} className={styles.checklistItem}>
+                      <CheckCircle2 size={18} strokeWidth={1.8} />
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              </Reveal>
+            </section>
+
+            <section id="contact" className={styles.section}>
+              <div className={styles.ctaGrid}>
+                <Reveal className={styles.ctaCopy}>
+                  <SectionLabel>Финальный шаг</SectionLabel>
+
+                  <h2 className={styles.ctaTitle}>
+                    Если хотите лендинг,
+                    <br />
+                    который выглядит вкусно и работает на бронь,
+                    <br />
+                    <em>давайте обсудим ваш формат.</em>
+                  </h2>
+
+                  <p className={styles.ctaText}>
+                    Напишите в WhatsApp или позвоните. Я отвечу лично, покажу примеры и
+                    предложу направление именно под ваше заведение.
+                  </p>
+
+                  <div className={styles.heroActions}>
+                    <ActionButton href={WHATSAPP_LINK}>Написать в WhatsApp</ActionButton>
+                    <ActionButton href={PHONE_LINK} secondary>
+                      Позвонить
+                    </ActionButton>
+                  </div>
+                </Reveal>
+
+                <Reveal delay={0.12}>
+                  <aside className={styles.contactCard}>
+                    <div className={styles.contactBadge}>
+                      <MessageCircle size={18} strokeWidth={1.8} />
+                      <span>Отвечаю лично</span>
+                    </div>
+
+                    <a
+                      href={WHATSAPP_LINK}
+                      className={styles.contactLinkPrimary}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      <span>WhatsApp</span>
+                      <ArrowRight size={18} strokeWidth={1.8} />
+                    </a>
+
+                    <a href={PHONE_LINK} className={styles.contactLinkSecondary}>
+                      <Phone size={18} strokeWidth={1.8} />
+                      <span>{PHONE_DISPLAY}</span>
+                    </a>
+
+                    <div className={styles.contactList}>
+                      {contactPromises.map((item) => (
+                        <div key={item} className={styles.contactListItem}>
+                          <CheckCircle2 size={16} strokeWidth={1.8} />
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <p className={styles.finalNote}>WhatsApp и звонки доступны ежедневно.</p>
+                  </aside>
+                </Reveal>
+              </div>
+            </section>
+          </main>
+
+          <footer className={styles.footer}>
+            <p className={styles.footerText}>Веб-студия · Лендинги для заведений</p>
+          </footer>
         </div>
-      </section>
 
-      <section id="offer" style={{ padding: "120px 20px", background: "var(--dark)" }}>
-        <div style={{ maxWidth: 900, margin: "0 auto" }}>
-          <Reveal>
-            <SectionLabel>Что вы получаете</SectionLabel>
-          </Reveal>
-
-          <Reveal delay={0.1}>
-            <h2
-              style={{
-                fontFamily: "'Cormorant Garamond', serif",
-                fontSize: "clamp(32px, 5vw, 56px)",
-                fontWeight: 300,
-                lineHeight: 1.15,
-                color: "var(--cream)",
-                marginBottom: 56,
-              }}
-            >
-              Лендинг, который
-              <br />
-              <em style={{ fontStyle: "italic", color: "var(--gold)" }}>работает на вас 24/7</em>
-            </h2>
-          </Reveal>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-              gap: 2,
-              background: "rgba(201,169,110,0.06)",
-            }}
+        <div className={styles.mobileBar}>
+          <a
+            href={WHATSAPP_LINK}
+            className={styles.mobileBarAction}
+            rel="noreferrer"
+            target="_blank"
           >
-            {offerItems.map((item, index) => (
-              <OfferCard key={item.n} item={item} delay={(index % 3) * 0.1} />
-            ))}
-          </div>
+            <MessageCircle size={18} strokeWidth={1.8} />
+            <span>WhatsApp</span>
+          </a>
+
+          <a href={PHONE_LINK} className={classNames(styles.mobileBarAction, styles.mobileBarSecondary)}>
+            <Phone size={18} strokeWidth={1.8} />
+            <span>Позвонить</span>
+          </a>
         </div>
-      </section>
-
-      <section
-        style={{
-          padding: "120px 20px",
-          background: "var(--dark-2)",
-          textAlign: "center",
-          position: "relative",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background:
-              "radial-gradient(ellipse 70% 50% at 50% 50%, rgba(201,169,110,0.06) 0%, transparent 70%)",
-            pointerEvents: "none",
-          }}
-        />
-
-        <div style={{ maxWidth: 800, margin: "0 auto", position: "relative", zIndex: 2 }}>
-          <Reveal>
-            <span
-              style={{
-                fontFamily: "'Cormorant Garamond', serif",
-                fontSize: 44,
-                color: "rgba(201,169,110,0.2)",
-                display: "block",
-                lineHeight: 1,
-                marginBottom: 16,
-              }}
-            >
-              *
-            </span>
-          </Reveal>
-
-          <Reveal delay={0.15}>
-            <p
-              style={{
-                fontFamily: "'Cormorant Garamond', serif",
-                fontSize: "clamp(26px, 5vw, 52px)",
-                fontWeight: 300,
-                fontStyle: "italic",
-                color: "var(--cream)",
-                lineHeight: 1.35,
-              }}
-            >
-              Хороший лендинг — это не расход.
-              <br />
-              Это <span style={{ color: "var(--gold)", fontStyle: "normal" }}>инвестиция, которая возвращается</span>
-              <br />
-              с каждым новым гостем.
-            </p>
-          </Reveal>
-
-          <Reveal delay={0.25}>
-            <p
-              style={{
-                fontSize: 12,
-                letterSpacing: "0.22em",
-                textTransform: "uppercase",
-                color: "var(--text-dim)",
-                marginTop: 40,
-              }}
-            >
-              Ваши конкуренты уже есть в интернете. Время занять своё место.
-            </p>
-          </Reveal>
-
-          <Reveal delay={0.35}>
-            <div
-              style={{
-                width: 60,
-                height: 1,
-                background: "var(--gold)",
-                margin: "40px auto 0",
-                opacity: 0.5,
-              }}
-            />
-          </Reveal>
-        </div>
-      </section>
-
-      <section style={{ padding: "120px 20px", background: "var(--dark)", textAlign: "center" }}>
-        <div style={{ maxWidth: 700, margin: "0 auto" }}>
-          <Reveal>
-            <h2
-              style={{
-                fontFamily: "'Cormorant Garamond', serif",
-                fontSize: "clamp(42px, 8vw, 96px)",
-                fontWeight: 300,
-                lineHeight: 1,
-                color: "var(--cream)",
-                marginBottom: 20,
-              }}
-            >
-              Готовы
-              <br />
-              <em style={{ fontStyle: "italic", color: "var(--gold)" }}>обсудить?</em>
-            </h2>
-          </Reveal>
-
-          <Reveal delay={0.1}>
-            <p
-              style={{
-                fontSize: 14,
-                color: "var(--text-dim)",
-                marginBottom: 52,
-                letterSpacing: "0.05em",
-              }}
-            >
-              Напишите — покажу примеры, расскажу про стоимость и сроки
-            </p>
-          </Reveal>
-
-          <Reveal delay={0.2}>
-            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", justifyContent: "center" }}>
-              <BtnPrimary href={WHATSAPP_LINK}>WhatsApp</BtnPrimary>
-              <BtnSecondary href={`tel:${PHONE_NUMBER}`}>Позвонить</BtnSecondary>
-            </div>
-          </Reveal>
-
-          <Reveal delay={0.3}>
-            <p
-              style={{
-                marginTop: 36,
-                fontSize: 12,
-                color: "var(--text-dim)",
-                letterSpacing: "0.1em",
-              }}
-            >
-              WhatsApp и звонки: {PHONE_DISPLAY}
-            </p>
-          </Reveal>
-        </div>
-      </section>
-
-      <footer
-        style={{
-          padding: "28px 20px",
-          borderTop: "1px solid rgba(201,169,110,0.1)",
-          textAlign: "center",
-        }}
-      >
-        <p
-          style={{
-            fontSize: 11,
-            letterSpacing: "0.22em",
-            textTransform: "uppercase",
-            color: "var(--text-dim)",
-          }}
-        >
-          Веб-студия · Лендинги для заведений
-        </p>
-      </footer>
+      </div>
     </>
-  );
-}
-
-type ButtonProps = {
-  href: string;
-  children: ReactNode;
-};
-
-function BtnPrimary({ href, children }: ButtonProps) {
-  const [hovered, setHovered] = useState(false);
-
-  return (
-    <a
-      href={href}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        display: "inline-block",
-        padding: "16px 44px",
-        background: "var(--gold)",
-        color: "var(--dark)",
-        fontFamily: "'DM Sans', sans-serif",
-        fontSize: 11,
-        fontWeight: 600,
-        letterSpacing: "0.2em",
-        textTransform: "uppercase",
-        textDecoration: "none",
-        transition: "box-shadow 0.3s ease, opacity 0.3s ease",
-        boxShadow: hovered ? "0 0 40px rgba(201,169,110,0.35)" : "none",
-        opacity: hovered ? 0.9 : 1,
-        cursor: "pointer",
-      }}
-    >
-      {children}
-    </a>
-  );
-}
-
-function BtnSecondary({ href, children }: ButtonProps) {
-  const [hovered, setHovered] = useState(false);
-
-  return (
-    <a
-      href={href}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        display: "inline-block",
-        padding: "16px 44px",
-        background: hovered ? "rgba(201,169,110,0.05)" : "transparent",
-        color: "var(--gold-light)",
-        fontFamily: "'DM Sans', sans-serif",
-        fontSize: 11,
-        fontWeight: 400,
-        letterSpacing: "0.2em",
-        textTransform: "uppercase",
-        textDecoration: "none",
-        border: `1px solid ${hovered ? "var(--gold)" : "rgba(201,169,110,0.3)"}`,
-        transition: "all 0.3s ease",
-        cursor: "pointer",
-      }}
-    >
-      {children}
-    </a>
   );
 }
