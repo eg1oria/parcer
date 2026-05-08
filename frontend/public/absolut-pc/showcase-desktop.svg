@@ -1,0 +1,22 @@
+<svg width="960" height="720" viewBox="0 0 960 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="a" x1="184" y1="96" x2="768" y2="620" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#62DDFF"/>
+      <stop offset="1" stop-color="#1C6FBC"/>
+    </linearGradient>
+  </defs>
+  <rect width="960" height="720" rx="48" fill="#0C1728"/>
+  <ellipse cx="234" cy="190" rx="140" ry="110" fill="#4FD1FF" fill-opacity="0.28"/>
+  <ellipse cx="742" cy="130" rx="128" ry="94" fill="#FFC24B" fill-opacity="0.24"/>
+  <rect x="94" y="86" width="772" height="548" rx="34" fill="white" fill-opacity="0.03" stroke="white" stroke-opacity="0.08"/>
+  <rect x="168" y="180" width="446" height="258" rx="26" fill="#091321" stroke="white" stroke-opacity="0.1" stroke-width="4"/>
+  <rect x="190" y="202" width="402" height="214" rx="18" fill="url(#a)" fill-opacity="0.35"/>
+  <path d="M190 330C266 268 350 240 444 248C512 254 562 284 592 334V416H190V330Z" fill="#07111F" fill-opacity="0.52"/>
+  <rect x="324" y="458" width="134" height="24" rx="12" fill="#13233A"/>
+  <path d="M294 504H488L532 566H250L294 504Z" fill="#16273C"/>
+  <rect x="236" y="566" width="310" height="42" rx="21" fill="#0C1625"/>
+  <rect x="624" y="164" width="168" height="344" rx="24" fill="#091321" stroke="white" stroke-opacity="0.1" stroke-width="4"/>
+  <rect x="644" y="188" width="128" height="220" rx="18" fill="#FFC24B" fill-opacity="0.28"/>
+  <rect x="656" y="434" width="104" height="20" rx="10" fill="#13233A"/>
+  <rect x="674" y="474" width="68" height="18" rx="9" fill="white" fill-opacity="0.2"/>
+</svg>

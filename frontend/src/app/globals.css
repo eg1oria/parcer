@@ -8,8 +8,20 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-absolut-bg: #07111f;
+  --color-absolut-surface: #0f1b2e;
+  --color-absolut-foreground: #eaf2ff;
+  --color-absolut-muted: #8fa5c2;
+  --color-absolut-accent: #4fd1ff;
+  --color-absolut-warm: #ffc24b;
+  --font-brand: var(--font-sora), var(--font-manrope), Arial, Helvetica, sans-serif;
+  --font-ui: var(--font-manrope), Arial, Helvetica, sans-serif;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
@@ -23,4 +35,38 @@ input,
 select,
 textarea {
   letter-spacing: 0;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.absolutpc-shell {
+  background:
+    radial-gradient(circle at top left, rgba(79, 209, 255, 0.1), transparent 24%),
+    radial-gradient(circle at top right, rgba(255, 194, 75, 0.08), transparent 20%),
+    linear-gradient(180deg, #07111f 0%, #081321 38%, #050c17 100%);
+}
+
+.absolutpc-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-position: center;
+  background-size: 72px 72px;
+  mask-image: radial-gradient(circle at center, black 44%, transparent 92%);
+  opacity: 0.18;
+}
+
+.absolutpc-noise {
+  background-image:
+    radial-gradient(circle at 18% 16%, rgba(79, 209, 255, 0.16), transparent 18%),
+    radial-gradient(circle at 82% 14%, rgba(255, 194, 75, 0.14), transparent 18%),
+    radial-gradient(circle at 50% 100%, rgba(79, 209, 255, 0.1), transparent 22%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
