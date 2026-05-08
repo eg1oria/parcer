@@ -1,10 +1,8 @@
 import type { Metadata } from "next";
 
-import { DashboardApp } from '@/components/dashboard-app';
-
 export const metadata: Metadata = {
-  title: "Test Prep Dashboard",
-  description: "Private dashboard for importing and managing tests.",
+  title: "Tests",
+  description: "Private test routes.",
   robots: {
     index: false,
     follow: false,
@@ -17,6 +15,10 @@ export const metadata: Metadata = {
   },
 };
 
-export default function Home() {
-  return <DashboardApp />;
+export default function TestsLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return children;
 }

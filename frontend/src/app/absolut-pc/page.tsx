@@ -16,62 +16,145 @@ import { SiteFooter } from './_components/site-footer';
 import { SiteHeader } from './_components/site-header';
 import { TrustBar } from './_components/trust-bar';
 import { landingContent } from './_data/content';
+import { getAbsoluteUrl, getSiteUrl, siteConfig } from '@/lib/seo';
 
 const { metadata: pageMetadata } = landingContent;
+const pagePath = '/absolut-pc';
+const pageUrl = getAbsoluteUrl(pagePath);
+const openGraphImageUrl = getAbsoluteUrl('/absolut-pc/opengraph-image');
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://absolutpc.kz'),
+  metadataBase: getSiteUrl(),
   title: pageMetadata.title,
   description: pageMetadata.description,
+  keywords: [
+    'магазин компьютеров Алматы',
+    'комплектующие Алматы',
+    'ремонт ноутбуков Алматы',
+    'ремонт компьютеров Алматы',
+    'мониторы Алматы',
+    'AbsolutPc',
+  ],
   alternates: {
-    canonical: landingContent.canonicalUrl,
+    canonical: pagePath,
+  },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      'max-image-preview': 'large',
+      'max-snippet': -1,
+      'max-video-preview': -1,
+    },
   },
   openGraph: {
     title: pageMetadata.title,
     description: pageMetadata.description,
-    locale: 'ru_KZ',
+    locale: siteConfig.locale,
     siteName: landingContent.storeName,
     type: 'website',
-    url: landingContent.canonicalUrl,
+    url: pageUrl,
+    images: [
+      {
+        url: openGraphImageUrl,
+        width: 1200,
+        height: 630,
+        alt: pageMetadata.title,
+      },
+    ],
   },
   twitter: {
     card: 'summary_large_image',
     title: pageMetadata.title,
     description: pageMetadata.description,
+    images: [openGraphImageUrl],
   },
 };
 
 function buildJsonLd() {
   return {
     '@context': 'https://schema.org',
-    '@type': ['ComputerStore', 'LocalBusiness'],
-    name: landingContent.storeName,
-    description: landingContent.metadata.description,
-    url: landingContent.canonicalUrl,
-    telephone: landingContent.phoneDisplay,
-    image: `${landingContent.canonicalUrl}/opengraph-image`,
-    address: {
-      '@type': 'PostalAddress',
-      addressCountry: 'KZ',
-      addressLocality: landingContent.city,
-      streetAddress: landingContent.address,
-    },
-    openingHoursSpecification: [
+    '@graph': [
       {
-        '@type': 'OpeningHoursSpecification',
-        dayOfWeek: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-        opens: '10:30',
-        closes: '19:00',
+        '@type': 'WebSite',
+        '@id': `${getAbsoluteUrl('/')}#website`,
+        url: getAbsoluteUrl('/'),
+        name: landingContent.storeName,
+        inLanguage: 'ru-KZ',
+      },
+      {
+        '@type': 'WebPage',
+        '@id': `${pageUrl}#webpage`,
+        url: pageUrl,
+        name: pageMetadata.title,
+        description: pageMetadata.description,
+        inLanguage: 'ru-KZ',
+        isPartOf: {
+          '@id': `${getAbsoluteUrl('/')}#website`,
+        },
+        about: {
+          '@id': `${pageUrl}#store`,
+        },
+        primaryImageOfPage: {
+          '@type': 'ImageObject',
+          url: openGraphImageUrl,
+        },
+      },
+      {
+        '@type': ['ComputerStore', 'LocalBusiness'],
+        '@id': `${pageUrl}#store`,
+        name: landingContent.storeName,
+        description: landingContent.metadata.description,
+        url: pageUrl,
+        telephone: landingContent.phoneDisplay,
+        image: openGraphImageUrl,
+        address: {
+          '@type': 'PostalAddress',
+          addressCountry: 'KZ',
+          addressLocality: landingContent.city,
+          streetAddress: landingContent.address,
+        },
+        openingHoursSpecification: [
+          {
+            '@type': 'OpeningHoursSpecification',
+            dayOfWeek: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+            opens: '10:30',
+            closes: '19:00',
+          },
+        ],
+        areaServed: landingContent.city,
+        sameAs: [landingContent.reviewsUrl],
+        contactPoint: [
+          {
+            '@type': 'ContactPoint',
+            telephone: landingContent.phoneDisplay,
+            contactType: 'customer support',
+            areaServed: 'KZ',
+            availableLanguage: ['ru', 'kk'],
+          },
+        ],
+        aggregateRating: {
+          '@type': 'AggregateRating',
+          ratingValue: '5.0',
+          reviewCount: '15',
+          ratingCount: '19',
+        },
+      },
+      {
+        '@type': 'FAQPage',
+        '@id': `${pageUrl}#faq`,
+        mainEntity: landingContent.faqs.map((item) => ({
+          '@type': 'Question',
+          name: item.question,
+          acceptedAnswer: {
+            '@type': 'Answer',
+            text: item.answer,
+          },
+        })),
       },
     ],
-    areaServed: landingContent.city,
-    sameAs: [landingContent.reviewsUrl],
-    aggregateRating: {
-      '@type': 'AggregateRating',
-      ratingValue: '5.0',
-      reviewCount: '15',
-      ratingCount: '19',
-    },
   };
 }
 
